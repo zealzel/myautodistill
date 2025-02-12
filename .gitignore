@@ -1,0 +1,6 @@
+videos/
+images/
+runs/
+dataset/
+extract_frames/
+*.pt
