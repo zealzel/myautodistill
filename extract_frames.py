@@ -21,7 +21,9 @@ print("FRAMES_DIR:", FRAMES_DIR)
 # start: int = 0,
 # end: Optional[int] = None,
 fps = sv.VideoInfo.from_video_path(VIDEO_PATH).fps
-# mediainfo --Inform="Video;%FrameRate%" /Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/try-autodistill/videos/milk-video-6.mov
+"""
+mediainfo --Output=JSON /Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/videos/IMG_2872.MOV | jq
+"""
 interval = 200  # 100ms
 stride = int(interval / fps)
 print("FPS:", fps)

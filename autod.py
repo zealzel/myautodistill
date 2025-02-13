@@ -15,9 +15,9 @@ print(HOME)
 
 
 # Initiate base model and autolabel
-def init_base_model_autolabel():
+def init_base_model_autolabel(datset_name):
     ontology = CaptionOntology({"milk bottle": "bottle", "blue cap": "cap"})
-    DATASET_DIR_PATH = f"{HOME}/dataset"
+    DATASET_DIR_PATH = f"{HOME}/dataset/{datset_name}"
 
     base_model = GroundedSAM(ontology=ontology)
     dataset = base_model.label(

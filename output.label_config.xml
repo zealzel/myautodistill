@@ -1,0 +1,9 @@
+<View>
+  <Image name="image" value="$image"/>
+
+  <Header value="RectangleLabels"/>
+  <RectangleLabels name="label" toName="image">
+    <Label value="hand" background="rgba(218, 1, 238, 1)"/>
+    <Label value="mybottle" background="rgba(0, 255, 0, 1)"/>
+  </RectangleLabels>
+</View>
