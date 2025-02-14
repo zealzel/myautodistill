@@ -1,4 +1,5 @@
 import os
+import shutil
 from ultralytics import YOLO
 import supervision as sv
 from pathlib import Path
@@ -6,26 +7,47 @@ from autodistill_yolov8 import YOLOv8
 from tqdm import tqdm
 import roboflow
 import numpy as np
+from autodistill.helpers import split_data
 from autodistill.detection import CaptionOntology
 from autodistill_grounded_sam import GroundedSAM
 
 
-class FaceTrain:
-    def __init__(self):
+class YoloFit:
+    def __init__(self, projname, test_val_ratio=0.2):
+        self.projname = projname
         self.home = os.getcwd()
-        self.video_dir_path = f"{self.home}/videos"
-        self.image_dir_path = f"{self.home}/images"
+        self.proj = f"{self.home}/projects/{self.projname}"
+        self.video_dir_path = f"{self.proj}/videos"
+        self.image_dir_path = f"{self.proj}/images"
+        self.frame_dir_path = f"{self.proj}/frames"
         self.frame_interval = 100  # ms
-        self.video_paths = sv.list_files_with_extensions(
-            directory=self.video_dir_path, extensions=["mov", "mp4", "MOV"]
-        )
+        print("proj:", self.proj)
+        print("video_dir_path:", self.video_dir_path)
+        print("image_dir_path:", self.image_dir_path)
+        print("frame_dir_path:", self.frame_dir_path)
+        print("video_paths:", self.video_paths)
         roboflow.login()
 
+    @property
+    def video_paths(self):
+        return sv.list_files_with_extensions(
+            directory=self.video_dir_path, extensions=["mov", "mp4", "MOV"]
+        )
+
+    def create_proj(self):
+        project_path = Path(self.home) / "projects" / self.projname
+        project_path.mkdir(parents=True, exist_ok=True)
+        # Create subdirectories
+        # (project_path / "dataset").mkdir(exist_ok=True)
+        (project_path / "dataset/train/images").mkdir(parents=True, exist_ok=True)
+        (project_path / "dataset/train/labels").mkdir(parents=True, exist_ok=True)
+        (project_path / "dataset/valid/images").mkdir(parents=True, exist_ok=True)
+        (project_path / "dataset/valid/labels").mkdir(parents=True, exist_ok=True)
+        (project_path / "frames").mkdir(exist_ok=True)
+        (project_path / "runs").mkdir(exist_ok=True)
+        (project_path / "videos").mkdir(exist_ok=True)
+
     def download_dataset(self, dataset_url, model_format):
-        # dataset = roboflow.download_dataset(
-        #     dataset_url="https://universe.roboflow.com/mohamed-traore-2ekkp/taco-trash-annotations-in-context/model/16",
-        #     model_format="yolov8",
-        # )
         dataset = roboflow.download_dataset(
             datraset_url=dataset_url, model_format=model_format
         )
@@ -41,7 +63,7 @@ class FaceTrain:
             print(f"interval: {self.frame_interval} s")
             print("frame_stride:", frame_stride)
             with sv.ImageSink(
-                target_dir_path=self.image_dir_path,
+                target_dir_path=self.frame_dir_path,
                 image_name_pattern=image_name_pattern,
             ) as sink:
                 images_extract = sv.get_video_frames_generator(
@@ -51,24 +73,56 @@ class FaceTrain:
                     sink.save_image(image=image)
                 print(f"total frame count: {len(list(images_extract))}")
 
-    def list_files_with_extensions(self):
+    def list_images_with_extensions(self):
         image_paths = sv.list_files_with_extensions(
             directory=self.image_dir_path, extensions=["png", "jpg", "jpg"]
         )
         print("image count:", len(image_paths))
         return image_paths
 
-    def init_base_model_autolabel(self, datset_name, annotation_class):
+    def list_frames_with_extensions(self):
+        frame_paths = sv.list_files_with_extensions(
+            directory=self.frame_dir_path, extensions=["png", "jpg", "jpg"]
+        )
+        print("frame count:", len(frame_paths))
+        return frame_paths
+
+    def init_base_model_autolabel(self, annotation_class, from_frames=True):
         # annotation_class = {"milk bottle": "bottle", "blue cap": "cap"}
         ontology = CaptionOntology(annotation_class)
-        dataset_dir_path = f"{self.home}/dataset/{datset_name}"
+        dataset_dir_path = f"{self.proj}/dataset/"
         base_model = GroundedSAM(ontology=ontology)
+        input_folder = self.frame_dir_path if from_frames else self.image_dir_path
         dataset = base_model.label(
             input_folder=self.image_dir_path,
             extension=".png",
             output_folder=dataset_dir_path,
         )
         return base_model, dataset
+
+    def merge_test_val(self):
+        dataset_dir_path = f"{self.proj}/dataset/"
+        images_dir_path = Path(dataset_dir_path) / "images"
+        images_dir_path.mkdir(exist_ok=True)
+        labels_dir_path = Path(dataset_dir_path) / "annotations"
+        labels_dir_path.mkdir(exist_ok=True)
+
+        # Move images from train/images and valid/images to images/
+        for subdir in ["train/images", "valid/images"]:
+            source_dir = Path(dataset_dir_path) / subdir
+            for image_file in source_dir.glob("*.*"):
+                shutil.move(str(image_file), images_dir_path)
+
+        # Move labels from train/labels and valid/labels to annotations/
+        for subdir in ["train/labels", "valid/labels"]:
+            source_dir = Path(dataset_dir_path) / subdir
+            for label_file in source_dir.glob("*.*"):
+                shutil.move(str(label_file), labels_dir_path)
+
+    def rearrnage_test_val(self, split_ratio=0.8):
+        dataset_dir_path = f"{self.proj}/dataset/"
+        self.merge_test_val()
+        split_data(dataset_dir_path, split_ratio=split_ratio)
 
     def display_annotation(self, dataset_name):
         dataset_dir_path = f"{self.home}/dataset/{dataset_name}"
@@ -101,7 +155,7 @@ class FaceTrain:
         for i, (image_path, image, annotation) in enumerate(dataset):
             if i == SAMPLE_SIZE:
                 break
-            annotated_image = ismage.copy()
+            annotated_image = image.copy()
             annotated_image = mask_annotator.annotate(
                 scene=annotated_image, detections=annotation
             )
@@ -171,15 +225,18 @@ class FaceTrain:
 
 
 if __name__ == "__main__":
-    ft = FaceTrain()
+    dataset_name = "abc"
+    yf = YoloFit(dataset_name)
     annotation_class = {
         "normal human hand": "hand",
         "bottle made by silver stain steel with slightly cone shape": "mybottle",
     }
-    dataset_name = "my-first-customed"
-    ft.convert_video_to_image()
+    # yf.convert_video_to_image()
+    # yf.init_base_model_autolabel(
+    #     annotation_class=annotation_class,
+    # )
     """
-    ft.init_base_model_autolabel(
+    yf.init_base_model_autolabel(
         datset_name="my-first-customed",
         annotation_class=annotation_class,
     )
