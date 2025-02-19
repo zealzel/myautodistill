@@ -1,4 +1,9 @@
 import os
+import enum
+import urllib.request
+import cv2
+import glob
+import random
 import shutil
 from ultralytics import YOLO
 import supervision as sv
@@ -7,9 +12,251 @@ from autodistill_yolov8 import YOLOv8
 from tqdm import tqdm
 import roboflow
 import numpy as np
+
 from autodistill.helpers import split_data
 from autodistill.detection import CaptionOntology
+from groundingdino.util.inference import Model
+
+from autodistill.detection import DetectionBaseModel
+
+import autodistill_grounded_sam.helpers
+import autodistill.helpers
+
 from autodistill_grounded_sam import GroundedSAM
+from label_studio_sdk.converter.imports import yolo as import_yolo
+from PIL import Image
+import yaml
+import torch
+
+
+if torch.cuda.is_available():
+    print("CUDA available")
+    DEVICE = torch.device("cuda")
+elif torch.mps.is_available():
+    print("mps available")
+    DEVICE = torch.device("mps")
+else:
+    print("WARNING: CUDA or MPS not available. GroundingDINO will run very slowly.")
+
+print(f"DEVICE: {DEVICE}")
+
+
+original_label = DetectionBaseModel.label
+
+
+class NmsSetting(str, enum.Enum):
+    NONE = "no_nms"
+    CLASS_SPECIFIC = "class_specific"
+    CLASS_AGNOSTIC = "class_agnostic"
+
+
+def my_detection_label(
+    self,
+    input_folder: str,
+    extension: str = ".jpg",
+    output_folder: str | None = None,
+    human_in_the_loop: bool = False,
+    roboflow_project: str | None = None,
+    roboflow_tags: list[str] = ["autodistill"],
+    sahi: bool = False,
+    record_confidence: bool = False,
+    nms_settings: NmsSetting = NmsSetting.NONE,
+) -> sv.DetectionDataset:
+    """
+    Label a dataset with the model.
+    """
+    print("monkey patch! my_detection_label")
+    if output_folder is None:
+        output_folder = input_folder + "_labeled"
+
+    os.makedirs(output_folder, exist_ok=True)
+
+    image_paths = glob.glob(input_folder + "/*" + extension)
+    detections_map = {}
+
+    if sahi:
+        slicer = sv.InferenceSlicer(callback=self.predict)
+
+    progress_bar = tqdm(image_paths, desc="Labeling images")
+    for f_path in progress_bar:
+        progress_bar.set_description(desc=f"Labeling {f_path}", refresh=True)
+
+        image = cv2.imread(f_path)
+        if sahi:
+            detections = slicer(image)
+        else:
+            detections = self.predict(image)
+
+        if nms_settings == NmsSetting.CLASS_SPECIFIC:
+            detections = detections.with_nms()
+        if nms_settings == NmsSetting.CLASS_AGNOSTIC:
+            detections = detections.with_nms(class_agnostic=True)
+
+        detections_map[f_path] = detections
+
+    dataset = sv.DetectionDataset(self.ontology.classes(), image_paths, detections_map)
+
+    dataset.as_yolo(
+        output_folder + "/images",
+        output_folder + "/annotations",
+        min_image_area_percentage=0.01,
+        data_yaml_path=output_folder + "/data.yaml",
+    )
+
+    if record_confidence:
+        image_names = [os.path.basename(f_path) for f_path in image_paths]
+        self._record_confidence_in_files(
+            output_folder + "/annotations", image_names, detections_map
+        )
+
+    # my own overwrite
+    split_data(output_folder, split_ratio=1.0, record_confidence=record_confidence)
+
+    if human_in_the_loop:
+        roboflow.login()
+
+        rf = roboflow.Roboflow()
+
+        workspace = rf.workspace()
+
+        workspace.upload_dataset(output_folder, project_name=roboflow_project)
+
+    print("Labeled dataset created - ready for distillation.")
+    return dataset
+
+
+DetectionBaseModel.label = my_detection_label
+
+
+def load_grounding_dino():
+    AUTODISTILL_CACHE_DIR = os.path.expanduser("~/.cache/autodistill")
+
+    GROUDNING_DINO_CACHE_DIR = os.path.join(AUTODISTILL_CACHE_DIR, "groundingdino")
+
+    GROUNDING_DINO_CONFIG_PATH = os.path.join(
+        GROUDNING_DINO_CACHE_DIR, "GroundingDINO_SwinT_OGC.py"
+    )
+    GROUNDING_DINO_CHECKPOINT_PATH = os.path.join(
+        GROUDNING_DINO_CACHE_DIR, "groundingdino_swint_ogc.pth"
+    )
+
+    try:
+        print("trying to load grounding dino directly")
+        grounding_dino_model = Model(
+            model_config_path=GROUNDING_DINO_CONFIG_PATH,
+            model_checkpoint_path=GROUNDING_DINO_CHECKPOINT_PATH,
+            device=DEVICE,
+        )
+        return grounding_dino_model
+    except Exception:
+        print("downloading dino model weights")
+        if not os.path.exists(GROUDNING_DINO_CACHE_DIR):
+            os.makedirs(GROUDNING_DINO_CACHE_DIR)
+
+        if not os.path.exists(GROUNDING_DINO_CHECKPOINT_PATH):
+            url = "https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth"
+            urllib.request.urlretrieve(url, GROUNDING_DINO_CHECKPOINT_PATH)
+
+        if not os.path.exists(GROUNDING_DINO_CONFIG_PATH):
+            url = "https://raw.githubusercontent.com/roboflow/GroundingDINO/main/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+            urllib.request.urlretrieve(url, GROUNDING_DINO_CONFIG_PATH)
+
+        grounding_dino_model = Model(
+            model_config_path=GROUNDING_DINO_CONFIG_PATH,
+            model_checkpoint_path=GROUNDING_DINO_CHECKPOINT_PATH,
+            device=DEVICE,
+        )
+
+        # grounding_dino_model.to(DEVICE)
+
+        return grounding_dino_model
+
+
+autodistill_grounded_sam.helpers.load_grounding_dino = load_grounding_dino
+
+
+def test_base_import_yolo(input_data_dir):
+    """Tests generated config and json files for yolo imports
+    test_import_yolo_data folder assumes only images in the 'images' folder
+    with corresponding labels existing in the 'labes' dir and a 'classes.txt' present.
+    (currently 7 images -> 3 png, 2 jpg and 2 jpeg files)
+    """
+    # input_data_dir = os.path.join(
+    #     os.path.abspath(os.path.dirname(__file__)), "data", "test_import_yolo_data"
+    # )
+    # out_json_file = os.path.join("/tmp", "lsc-pytest", "yolo_exp_test.json")
+    out_json_file = "output_test.json"
+
+    image_ext = ".jpg,.jpeg,.png"  # comma seperated string of extns.
+
+    image_root_url = "/data/local-files/?d=train/images"
+    import_yolo.convert_yolo_to_ls(
+        input_dir=input_data_dir,
+        out_file=out_json_file,
+        image_ext=image_ext,
+        image_root_url=image_root_url,
+    )
+
+    #'yolo_exp_test.label_config.xml' and 'yolo_exp_test.json' must be generated.
+    # out_config_file = os.path.join(
+    #     "/tmp", "lsc-pytest", "yolo_exp_test.label_config.xml"
+    # )
+    out_config_file = "output_test.label_config.xml"
+    assert os.path.exists(out_config_file) and os.path.exists(out_json_file), (
+        "> import failed! files not generated."
+    )
+
+    # # provided labels from classes.txt
+    # with open(os.path.join(input_data_dir, "classes.txt"), "r") as f:
+    #     labels = f.read()[:-1].split(
+    #         "\n"
+    #     )  # [:-1] since last line in classes.txt is empty by convention
+    #
+    # # generated labels from config xml
+    # label_element = ET.parse(out_config_file).getroot()[2]
+    # labels_generated = [x.attrib["value"] for x in label_element.getchildren()]
+    # assert set(labels) == set(labels_generated), (
+    #     "> generated class labels do not match original labels"
+    # )
+    #
+    # # total image files in the input folder
+    # img_files = glob.glob(os.path.join(input_data_dir, "images", "*"))
+    #
+    # with open(out_json_file, "r") as f:
+    #     ls_data = json.loads(f.read())
+
+    # assert len(ls_data) == len(img_files), "some file imports did not succeed!"
+
+
+def seg_to_bbox(seg_info):
+    # Example input: 5 0.046875 0.369141 0.0644531 0.384766 0.0800781 0.402344 ...
+    class_id, *points = seg_info.split()
+    points = [float(p) for p in points]
+    x_min, y_min, x_max, y_max = (
+        min(points[0::2]),
+        min(points[1::2]),
+        max(points[0::2]),
+        max(points[1::2]),
+    )
+    width, height = x_max - x_min, y_max - y_min
+    x_center, y_center = (x_min + x_max) / 2, (y_min + y_max) / 2
+    # bbox_info = f"{int(class_id) - 1} {x_center} {y_center} {width} {height}"
+    bbox_info = f"{int(class_id)} {x_center} {y_center} {width} {height}"
+    return bbox_info
+
+
+def seg2bbox(label_folder, out_label_folder):
+    for file in os.listdir(label_folder):
+        if file.endswith(".txt"):
+            label_textfile = os.path.join(label_folder, file)
+            with open(label_textfile, "r") as f:
+                lines = f.readlines()
+            bboxes = [seg_to_bbox(line) for line in lines]
+        print("bboxes:", bboxes)
+        out_label_textfile = os.path.join(out_label_folder, file)
+        print("out_label_textfile:", out_label_textfile)
+        with open(out_label_textfile, "w") as f:
+            f.writelines("\n".join(bboxes))
 
 
 class YoloFit:
@@ -94,7 +341,8 @@ class YoloFit:
         base_model = GroundedSAM(ontology=ontology)
         input_folder = self.frame_dir_path if from_frames else self.image_dir_path
         dataset = base_model.label(
-            input_folder=self.image_dir_path,
+            input_folder=input_folder,
+            # input_folder=self.image_dir_path,
             extension=".png",
             output_folder=dataset_dir_path,
         )
@@ -124,20 +372,15 @@ class YoloFit:
         self.merge_test_val()
         split_data(dataset_dir_path, split_ratio=split_ratio)
 
-    def display_annotation(self, dataset_name):
-        dataset_dir_path = f"{self.home}/dataset/{dataset_name}"
+    def display_annotation(self):
+        dataset_dir_path = f"{self.proj}/dataset"
         ANNOTATIONS_DIRECTORY_PATH = f"{dataset_dir_path}/train/labels"
         IMAGES_DIRECTORY_PATH = f"{dataset_dir_path}/train/images"
         DATA_YAML_PATH = f"{dataset_dir_path}/data.yaml"
-        # ANNOTATIONS_DIRECTORY_PATH = f"{self.home}/dataset/train/labels"
-        # IMAGES_DIRECTORY_PATH = f"{self.home}/dataset/train/images"
-        # DATA_YAML_PATH = f"{self.home}/dataset/data.yaml"
-
         print("ANNOTATIONS_DIRECTORY_PATH:", ANNOTATIONS_DIRECTORY_PATH)
         print("IMAGES_DIRECTORY_PATH:", IMAGES_DIRECTORY_PATH)
         print("DATA_YAML_PATH:", DATA_YAML_PATH)
 
-        IMAGE_DIR_PATH = f"{self.home}/images"
         SAMPLE_SIZE = 16
         SAMPLE_GRID_SIZE = (4, 4)
         SAMPLE_PLOT_SIZE = (16, 10)
@@ -175,15 +418,16 @@ class YoloFit:
             size=SAMPLE_PLOT_SIZE,
         )
 
-    def train_yolo(self, dataset_name):
-        dataset_dir_path = f"{self.home}/dataset/{dataset_name}"
-        ANNOTATIONS_DIRECTORY_PATH = f"{dataset_dir_path}/train/labels"
-        IMAGES_DIRECTORY_PATH = f"{dataset_dir_path}/train/images"
+    def train_yolo(self):
+        dataset_dir_path = f"{self.proj}/dataset"
         DATA_YAML_PATH = f"{dataset_dir_path}/data.yaml"
         target_model = YOLOv8("yolov8n.pt")
-        target_model.train(DATA_YAML_PATH, epochs=50)
+        target_model.train(
+            DATA_YAML_PATH, epochs=50, device="mps"
+        )  # or cuda if supported
 
     def predict_yolo(images):
+        # for importing into label-studio, TBD
         MODEL_NAME = "yolov8n.pt"
         model = YOLO()
         results = model(images)
@@ -225,8 +469,8 @@ class YoloFit:
 
 
 if __name__ == "__main__":
-    dataset_name = "abc"
-    yf = YoloFit(dataset_name)
+    projname = "abc"
+    yf = YoloFit(projname)
     annotation_class = {
         "normal human hand": "hand",
         "bottle made by silver stain steel with slightly cone shape": "mybottle",
@@ -235,11 +479,24 @@ if __name__ == "__main__":
     # yf.init_base_model_autolabel(
     #     annotation_class=annotation_class,
     # )
+    # in_path = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/dataset/my-first-customed/train/labels-bak/"
+    # out_path = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/dataset/my-first-customed/train/labels/"
+    in_path = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/dataset/my-first-customed/train"
+    out_path = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/dataset/my-first-customed/train"
+    # test_base_import_yolo(input_data_dir=in_path)
+
+    tt = lambda xc, yc, w, h: [xc - w / 2, yc - h / 2, w, h]
+
+    # seg2bbox(in_path, out_path)
     """
     yf.init_base_model_autolabel(
         datset_name="my-first-customed",
         annotation_class=annotation_class,
     )
+    yf.init_base_model_autolabel(
+        annotation_class=annotation_class,
+    )
+/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc
 
     yolo detect predict model=/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/runs/detect/train/weights/best.pt \
       source=/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/dataset/my-first-customed/train/images/IMG_2872-00099.jpg
