@@ -1,5 +1,7 @@
 import os
+import json
 import enum
+from datetime import datetime
 import urllib.request
 import cv2
 import glob
@@ -62,9 +64,6 @@ def my_detection_label(
     record_confidence: bool = False,
     nms_settings: NmsSetting = NmsSetting.NONE,
 ) -> sv.DetectionDataset:
-    """
-    Label a dataset with the model.
-    """
     print("monkey patch! my_detection_label")
     if output_folder is None:
         output_folder = input_folder + "_labeled"
@@ -175,21 +174,16 @@ def load_grounding_dino():
 autodistill_grounded_sam.helpers.load_grounding_dino = load_grounding_dino
 
 
-def test_base_import_yolo(input_data_dir):
+# def test_base_import_yolo(input_data_dir):
+def convert_yolo_to_labelstudio(
+    input_data_dir, image_root_url, out_json_file="output_for_labelstudio.json"
+):
     """Tests generated config and json files for yolo imports
     test_import_yolo_data folder assumes only images in the 'images' folder
     with corresponding labels existing in the 'labes' dir and a 'classes.txt' present.
-    (currently 7 images -> 3 png, 2 jpg and 2 jpeg files)
     """
-    # input_data_dir = os.path.join(
-    #     os.path.abspath(os.path.dirname(__file__)), "data", "test_import_yolo_data"
-    # )
-    # out_json_file = os.path.join("/tmp", "lsc-pytest", "yolo_exp_test.json")
-    out_json_file = "output_test.json"
-
     image_ext = ".jpg,.jpeg,.png"  # comma seperated string of extns.
-
-    image_root_url = "/data/local-files/?d=train/images"
+    # input_dir: directory with YOLO where images, labels, notes.json are located
     import_yolo.convert_yolo_to_ls(
         input_dir=input_data_dir,
         out_file=out_json_file,
@@ -197,11 +191,7 @@ def test_base_import_yolo(input_data_dir):
         image_root_url=image_root_url,
     )
 
-    #'yolo_exp_test.label_config.xml' and 'yolo_exp_test.json' must be generated.
-    # out_config_file = os.path.join(
-    #     "/tmp", "lsc-pytest", "yolo_exp_test.label_config.xml"
-    # )
-    out_config_file = "output_test.label_config.xml"
+    out_config_file = f"{out_json_file[:-5]}.label_config.xml"
     assert os.path.exists(out_config_file) and os.path.exists(out_json_file), (
         "> import failed! files not generated."
     )
@@ -245,18 +235,70 @@ def seg_to_bbox(seg_info):
     return bbox_info
 
 
-def seg2bbox(label_folder, out_label_folder):
-    for file in os.listdir(label_folder):
-        if file.endswith(".txt"):
-            label_textfile = os.path.join(label_folder, file)
-            with open(label_textfile, "r") as f:
-                lines = f.readlines()
-            bboxes = [seg_to_bbox(line) for line in lines]
+def seg2bbox(in_label_folder, out_label_folder=None):
+    """
+    in_label_folder is a directory, convert all .txt files in it to yolo bbox format in out_label_folder
+    if out_label_folder is not provided, the converted files will overwrite the original files
+    """
+    print("in_label_folder:", in_label_folder)
+    print("out_label_folder:", out_label_folder)
+    if not out_label_folder:
+        out_label_folder = in_label_folder
+    label_files = [e for e in os.listdir(in_label_folder) if e.endswith(".txt")]
+    if not label_files:
+        print("No label files found in the directory.")
+    for file in label_files:
+        if not file.endswith(".txt"):
+            continue
+        label_textfile = os.path.join(in_label_folder, file)
+        with open(label_textfile, "r") as f:
+            lines = f.readlines()
+        bboxes = [seg_to_bbox(line) for line in lines]
         print("bboxes:", bboxes)
         out_label_textfile = os.path.join(out_label_folder, file)
         print("out_label_textfile:", out_label_textfile)
         with open(out_label_textfile, "w") as f:
             f.writelines("\n".join(bboxes))
+
+
+def yolo8_to_yolo3(data_dir):
+    """
+    將位於 data_dir 目錄下的 YOLOv8 格式的 data.yaml 轉換成 YOLOv3 所需格式：
+      - notes.json：包含 categories 與 info 的 JSON 文件
+      - classes.txt：每行一個類別名稱
+
+    參數:
+      data_dir: 包含 data.yaml 的目錄路徑
+    """
+    # 定義檔案路徑
+    yolov8_data_yaml_path = os.path.join(data_dir, "yolov8", "data.yaml")
+    yolov3_notes_json_path = os.path.join(data_dir, "yolov3", "notes.json")
+    yolov3_classes_txt_path = os.path.join(data_dir, "yolov3", "classes.txt")
+
+    # 讀取 YOLOv8 的 data.yaml
+    with open(yolov8_data_yaml_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    # 提取類別名稱
+    names = data.get("names", [])
+    # 構建 notes.json 的資料結構
+    categories = [{"id": idx, "name": name} for idx, name in enumerate(names)]
+    info = {
+        "year": datetime.now().year,
+        "version": "1.0",
+        "contributor": "Label Studio",
+    }
+    notes = {"categories": categories, "info": info}
+
+    # 寫入 yolov3 檔案
+    # 寫入 notes.json
+    with open(yolov3_notes_json_path, "w", encoding="utf-8") as f:
+        json.dump(notes, f, indent=2, ensure_ascii=False)
+    # 寫入 classes.txt
+    with open(yolov3_classes_txt_path, "w", encoding="utf-8") as f:
+        for name in names:
+            f.write(f"{name}\n")
+
+    print("轉換完成！生成文件：", yolov3_notes_json_path, "和", yolov3_classes_txt_path)
 
 
 class YoloFit:
@@ -282,17 +324,48 @@ class YoloFit:
         )
 
     def create_proj(self):
+        def delete_path(path):
+            if os.path.islink(path):
+                os.remove(path)
+                print(f"Symlink {path} has been removed.")
+            elif os.path.isdir(path):
+                shutil.rmtree(path)
+                print(f"Directory {path} has been removed.")
+            else:
+                print(f"{path} is neither a directory nor a symlink.")
+
         project_path = Path(self.home) / "projects" / self.projname
         project_path.mkdir(parents=True, exist_ok=True)
         # Create subdirectories
         # (project_path / "dataset").mkdir(exist_ok=True)
-        (project_path / "dataset/train/images").mkdir(parents=True, exist_ok=True)
-        (project_path / "dataset/train/labels").mkdir(parents=True, exist_ok=True)
-        (project_path / "dataset/valid/images").mkdir(parents=True, exist_ok=True)
-        (project_path / "dataset/valid/labels").mkdir(parents=True, exist_ok=True)
+
+        # create project files
         (project_path / "frames").mkdir(exist_ok=True)
         (project_path / "runs").mkdir(exist_ok=True)
         (project_path / "videos").mkdir(exist_ok=True)
+
+        # create yolov8 dataset
+        yolov8_dataset_path = project_path / "dataset/yolov8"
+        (yolov8_dataset_path / "train/images").mkdir(parents=True, exist_ok=True)
+        (yolov8_dataset_path / "train/labels").mkdir(parents=True, exist_ok=True)
+        (yolov8_dataset_path / "valid/images").mkdir(parents=True, exist_ok=True)
+        (yolov8_dataset_path / "valid/labels").mkdir(parents=True, exist_ok=True)
+
+        # create yolov3 dataset
+        yolov3_dataset_path = project_path / "dataset/yolov3"
+        yolov3_images_symlink = yolov3_dataset_path / "images"
+        yolov8_images_target = yolov8_dataset_path / "train/images"
+        # (yolov3_dataset_path / "images").mkdir(parents=True, exist_ok=True)
+        (yolov3_dataset_path / "labels").mkdir(parents=True, exist_ok=True)
+
+        delete_path(yolov3_images_symlink)
+        if os.path.exists(yolov8_images_target) and not os.path.exists(
+            yolov3_images_symlink
+        ):
+            os.symlink(yolov8_images_target, yolov3_images_symlink)
+            print(f"Symlink created: {yolov3_images_symlink} -> {yolov8_images_target}")
+        else:
+            print("Target does not exist or symlink already exists.")
 
     def download_dataset(self, dataset_url, model_format):
         dataset = roboflow.download_dataset(
@@ -475,28 +548,33 @@ if __name__ == "__main__":
         "normal human hand": "hand",
         "bottle made by silver stain steel with slightly cone shape": "mybottle",
     }
-    # yf.convert_video_to_image()
-    # yf.init_base_model_autolabel(
-    #     annotation_class=annotation_class,
-    # )
-    # in_path = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/dataset/my-first-customed/train/labels-bak/"
-    # out_path = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/dataset/my-first-customed/train/labels/"
-    in_path = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/dataset/my-first-customed/train"
-    out_path = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/dataset/my-first-customed/train"
+    """
+    yf.convert_video_to_image()
+    yf.init_base_model_autolabel(
+        annotation_class=annotation_class,
+    )
+
+    5ataset_path = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset"
+    in_path = f"{dataset_path}/yolov8/train/labels"
+    out_path = f"{dataset_path}/yolov3/labels"
+    seg2bbox(in_path, out_path)
+
+    yolo8_to_yolo3(dataset_path)
+
     # test_base_import_yolo(input_data_dir=in_path)
 
-    tt = lambda xc, yc, w, h: [xc - w / 2, yc - h / 2, w, h]
+    input_dir = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset"
+    image_root_url = "/data/local-files/?d=train/images"
+    convert_yolo_to_labelstudio(input_dir, image_root_url)
+    """
 
-    # seg2bbox(in_path, out_path)
+    # tt = lambda xc, yc, w, h: [xc - w / 2, yc - h / 2, w, h]
+
     """
     yf.init_base_model_autolabel(
-        datset_name="my-first-customed",
         annotation_class=annotation_class,
     )
-    yf.init_base_model_autolabel(
-        annotation_class=annotation_class,
-    )
-/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc
+   /Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc
 
     yolo detect predict model=/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/runs/detect/train/weights/best.pt \
       source=/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/dataset/my-first-customed/train/images/IMG_2872-00099.jpg
