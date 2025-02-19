@@ -563,12 +563,16 @@ if __name__ == "__main__":
 
     # test_base_import_yolo(input_data_dir=in_path)
 
-    input_dir = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset"
-    image_root_url = "/data/local-files/?d=train/images"
+    input_dir = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset/yolov3"
+    image_root_url = "/data/local-files/?d=images"
     convert_yolo_to_labelstudio(input_dir, image_root_url)
-    """
 
-    # tt = lambda xc, yc, w, h: [xc - w / 2, yc - h / 2, w, h]
+    # import into label-studio
+    export LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
+    export LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset/yolov3
+    label-studio
+
+    """
 
     """
     yf.init_base_model_autolabel(
