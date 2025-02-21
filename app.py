@@ -301,6 +301,43 @@ def yolo8_to_yolo3(data_dir):
     print("轉換完成！生成文件：", yolov3_notes_json_path, "和", yolov3_classes_txt_path)
 
 
+def yolo3_to_yolo8(data_dir):
+    """
+    Convert YOLOv3 format to YOLOv8 format by creating a data.yaml file.
+
+    Parameters:
+      data_dir: Directory containing YOLOv3 format files (classes.txt and notes.json).
+    """
+    # Define file paths
+    yolov3_classes_txt_path = os.path.join(data_dir, "classes.txt")
+    yolov8_data_yaml_path = os.path.join(data_dir, "data.yaml")
+
+    # Read class names from classes.txt
+    with open(yolov3_classes_txt_path, "r", encoding="utf-8") as f:
+        class_names = [line.strip() for line in f.readlines()]
+
+    # Create data.yaml content
+    data_yaml_content = {
+        "train": os.path.join(data_dir, "yolov8", "train", "images"),
+        "val": os.path.join(data_dir, "yolov8", "valid", "images"),
+        "nc": len(class_names),
+        "names": class_names,
+    }
+
+    # Write data.yaml file
+    with open(yolov8_data_yaml_path, "w", encoding="utf-8") as f:
+        yaml.dump(data_yaml_content, f, default_flow_style=False)
+
+    target = f"{data_dir}/labels"
+    symlink = f"{data_dir}/annotations"
+    # shutil.rmtree(symlink, ignore_errors=True)
+    if os.path.islink(symlink):
+        os.remove(symlink)
+    os.symlink(target, symlink)
+
+    print("Conversion complete! Generated file:", yolov8_data_yaml_path)
+
+
 class YoloFit:
     def __init__(self, projname, test_val_ratio=0.2):
         self.projname = projname
@@ -554,7 +591,7 @@ if __name__ == "__main__":
         annotation_class=annotation_class,
     )
 
-    5ataset_path = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset"
+    dataset_path = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset"
     in_path = f"{dataset_path}/yolov8/train/labels"
     out_path = f"{dataset_path}/yolov3/labels"
     seg2bbox(in_path, out_path)
@@ -572,14 +609,20 @@ if __name__ == "__main__":
     export LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset/yolov3
     label-studio
 
-    """
+    # in label-studio, approve & modify the labels
+    # export datasets in yolov3 format
 
-    """
-    yf.init_base_model_autolabel(
-        annotation_class=annotation_class,
-    )
-   /Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc
+    # convert yolov3 to yolov8 format
+    dataset_from_ls = f"{dataset_path}/project-9-at-2025-02-19-09-45-87d33f43"
+    yolo3_to_yolo8(dataset_from_ls)
 
+    # split the data into train/valid/test set
+    split_data("/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset/project-9-at-2025-02-19-09-45-87d33f43", 0.8)
+
+    # training yolo8v model
+    yolo detect train data=projects/abc/dataset/project-9-at-2025-02-19-09-45-87d33f43/data.yaml model=yolo11n.yaml epochs=100 imgsz=640 device=mps
+
+    # predict
     yolo detect predict model=/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/runs/detect/train/weights/best.pt \
       source=/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/dataset/my-first-customed/train/images/IMG_2872-00099.jpg
 
