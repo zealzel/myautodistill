@@ -614,6 +614,7 @@ if __name__ == "__main__":
 
     # convert yolov3 to yolov8 format
     dataset_from_ls = f"{dataset_path}/project-9-at-2025-02-19-09-45-87d33f43"
+    dataset_from_ls = f"{dataset_path}/project-9-at-2025-02-26-01-54-58557314"
     yolo3_to_yolo8(dataset_from_ls)
 
     # split the data into train/valid/test set
