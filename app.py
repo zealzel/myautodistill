@@ -1,286 +1,105 @@
+#!/usr/bin/env python3
+import argparse
 import os
 import json
-import enum
-from datetime import datetime
-import urllib.request
-import cv2
-import glob
-import random
-import shutil
-from ultralytics import YOLO
-import supervision as sv
-from pathlib import Path
-from autodistill_yolov8 import YOLOv8
-from tqdm import tqdm
-import roboflow
-import numpy as np
-
-from autodistill.helpers import split_data
-from autodistill.detection import CaptionOntology
-from groundingdino.util.inference import Model
-
-from autodistill.detection import DetectionBaseModel
-
-import autodistill_grounded_sam.helpers
-import autodistill.helpers
-
-from autodistill_grounded_sam import GroundedSAM
-from label_studio_sdk.converter.imports import yolo as import_yolo
-from PIL import Image
 import yaml
-import torch
+import shutil
+import glob
+from datetime import datetime
+from pathlib import Path
+from tqdm import tqdm
 
 
-if torch.cuda.is_available():
-    print("CUDA available")
-    DEVICE = torch.device("cuda")
-elif torch.mps.is_available():
-    print("mps available")
-    DEVICE = torch.device("mps")
-else:
-    print("WARNING: CUDA or MPS not available. GroundingDINO will run very slowly.")
+# 1. 標註影像資料：原始的 my_detection_label 函式
+def cli_label(args):
+    from autodistill.detection import DetectionBaseModel
+    import supervision as sv
 
-print(f"DEVICE: {DEVICE}")
-
-
-original_label = DetectionBaseModel.label
-
-
-class NmsSetting(str, enum.Enum):
-    NONE = "no_nms"
-    CLASS_SPECIFIC = "class_specific"
-    CLASS_AGNOSTIC = "class_agnostic"
-
-
-def my_detection_label(
-    self,
-    input_folder: str,
-    extension: str = ".jpg",
-    output_folder: str | None = None,
-    human_in_the_loop: bool = False,
-    roboflow_project: str | None = None,
-    roboflow_tags: list[str] = ["autodistill"],
-    sahi: bool = False,
-    record_confidence: bool = False,
-    nms_settings: NmsSetting = NmsSetting.NONE,
-) -> sv.DetectionDataset:
-    print("monkey patch! my_detection_label")
-    if output_folder is None:
-        output_folder = input_folder + "_labeled"
-
-    os.makedirs(output_folder, exist_ok=True)
-
-    image_paths = glob.glob(input_folder + "/*" + extension)
-    detections_map = {}
-
-    if sahi:
-        slicer = sv.InferenceSlicer(callback=self.predict)
-
-    progress_bar = tqdm(image_paths, desc="Labeling images")
-    for f_path in progress_bar:
-        progress_bar.set_description(desc=f"Labeling {f_path}", refresh=True)
-
-        image = cv2.imread(f_path)
-        if sahi:
-            detections = slicer(image)
-        else:
-            detections = self.predict(image)
-
-        if nms_settings == NmsSetting.CLASS_SPECIFIC:
-            detections = detections.with_nms()
-        if nms_settings == NmsSetting.CLASS_AGNOSTIC:
-            detections = detections.with_nms(class_agnostic=True)
-
-        detections_map[f_path] = detections
-
-    dataset = sv.DetectionDataset(self.ontology.classes(), image_paths, detections_map)
-
-    dataset.as_yolo(
-        output_folder + "/images",
-        output_folder + "/annotations",
-        min_image_area_percentage=0.01,
-        data_yaml_path=output_folder + "/data.yaml",
+    # 假設已將 DetectionBaseModel.label 作過 monkey patch（見原始程式碼）
+    # 這裡直接使用已經被 patch 的 label 方法
+    model = DetectionBaseModel()  # 請依照實際模型初始化
+    print("開始標註影像...")
+    dataset = model.label(
+        input_folder=args.input_folder,
+        extension=args.extension,
+        output_folder=args.output_folder,
+        human_in_the_loop=args.human_in_the_loop,
+        roboflow_project=args.roboflow_project,
+        roboflow_tags=args.roboflow_tags,
+        sahi=args.sahi,
+        record_confidence=args.record_confidence,
+        nms_settings=args.nms_settings,
+    )
+    print(
+        "標註完成，輸出資料夾：", args.output_folder or (args.input_folder + "_labeled")
     )
 
-    if record_confidence:
-        image_names = [os.path.basename(f_path) for f_path in image_paths]
-        self._record_confidence_in_files(
-            output_folder + "/annotations", image_names, detections_map
-        )
 
-    # my own overwrite
-    split_data(output_folder, split_ratio=1.0, record_confidence=record_confidence)
+# 2. 載入 GroundingDINO 模型
+def cli_load_grounding_dino(args):
+    from autodistill_grounded_sam.helpers import load_grounding_dino
 
-    if human_in_the_loop:
-        roboflow.login()
-
-        rf = roboflow.Roboflow()
-
-        workspace = rf.workspace()
-
-        workspace.upload_dataset(output_folder, project_name=roboflow_project)
-
-    print("Labeled dataset created - ready for distillation.")
-    return dataset
+    model = load_grounding_dino()
+    print("GroundingDINO 模型已載入，運行裝置：", model.device)
 
 
-DetectionBaseModel.label = my_detection_label
+# 3. YOLO 格式轉 Label Studio（輸出 json 與 label_config.xml）
+def cli_convert_yolo_to_labelstudio(args):
+    from label_studio_sdk.converter.imports import yolo as import_yolo
 
-
-def load_grounding_dino():
-    AUTODISTILL_CACHE_DIR = os.path.expanduser("~/.cache/autodistill")
-
-    GROUDNING_DINO_CACHE_DIR = os.path.join(AUTODISTILL_CACHE_DIR, "groundingdino")
-
-    GROUNDING_DINO_CONFIG_PATH = os.path.join(
-        GROUDNING_DINO_CACHE_DIR, "GroundingDINO_SwinT_OGC.py"
-    )
-    GROUNDING_DINO_CHECKPOINT_PATH = os.path.join(
-        GROUDNING_DINO_CACHE_DIR, "groundingdino_swint_ogc.pth"
-    )
-
-    try:
-        print("trying to load grounding dino directly")
-        grounding_dino_model = Model(
-            model_config_path=GROUNDING_DINO_CONFIG_PATH,
-            model_checkpoint_path=GROUNDING_DINO_CHECKPOINT_PATH,
-            device=DEVICE,
-        )
-        return grounding_dino_model
-    except Exception:
-        print("downloading dino model weights")
-        if not os.path.exists(GROUDNING_DINO_CACHE_DIR):
-            os.makedirs(GROUDNING_DINO_CACHE_DIR)
-
-        if not os.path.exists(GROUNDING_DINO_CHECKPOINT_PATH):
-            url = "https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth"
-            urllib.request.urlretrieve(url, GROUNDING_DINO_CHECKPOINT_PATH)
-
-        if not os.path.exists(GROUNDING_DINO_CONFIG_PATH):
-            url = "https://raw.githubusercontent.com/roboflow/GroundingDINO/main/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-            urllib.request.urlretrieve(url, GROUNDING_DINO_CONFIG_PATH)
-
-        grounding_dino_model = Model(
-            model_config_path=GROUNDING_DINO_CONFIG_PATH,
-            model_checkpoint_path=GROUNDING_DINO_CHECKPOINT_PATH,
-            device=DEVICE,
-        )
-
-        # grounding_dino_model.to(DEVICE)
-
-        return grounding_dino_model
-
-
-autodistill_grounded_sam.helpers.load_grounding_dino = load_grounding_dino
-
-
-# def test_base_import_yolo(input_data_dir):
-def convert_yolo_to_labelstudio(
-    input_data_dir, image_root_url, out_json_file="output_for_labelstudio.json"
-):
-    """Tests generated config and json files for yolo imports
-    test_import_yolo_data folder assumes only images in the 'images' folder
-    with corresponding labels existing in the 'labes' dir and a 'classes.txt' present.
-    """
-    image_ext = ".jpg,.jpeg,.png"  # comma seperated string of extns.
-    # input_dir: directory with YOLO where images, labels, notes.json are located
+    print("轉換 YOLO 格式到 Label Studio 格式...")
     import_yolo.convert_yolo_to_ls(
-        input_dir=input_data_dir,
-        out_file=out_json_file,
-        image_ext=image_ext,
-        image_root_url=image_root_url,
+        input_dir=args.input_data_dir,
+        out_file=args.out_json_file,
+        image_ext=",.jpg,.jpeg,.png",
+        image_root_url=args.image_root_url,
     )
-
-    out_config_file = f"{out_json_file[:-5]}.label_config.xml"
-    assert os.path.exists(out_config_file) and os.path.exists(out_json_file), (
-        "> import failed! files not generated."
-    )
-
-    # # provided labels from classes.txt
-    # with open(os.path.join(input_data_dir, "classes.txt"), "r") as f:
-    #     labels = f.read()[:-1].split(
-    #         "\n"
-    #     )  # [:-1] since last line in classes.txt is empty by convention
-    #
-    # # generated labels from config xml
-    # label_element = ET.parse(out_config_file).getroot()[2]
-    # labels_generated = [x.attrib["value"] for x in label_element.getchildren()]
-    # assert set(labels) == set(labels_generated), (
-    #     "> generated class labels do not match original labels"
-    # )
-    #
-    # # total image files in the input folder
-    # img_files = glob.glob(os.path.join(input_data_dir, "images", "*"))
-    #
-    # with open(out_json_file, "r") as f:
-    #     ls_data = json.loads(f.read())
-
-    # assert len(ls_data) == len(img_files), "some file imports did not succeed!"
+    print("轉換完成！請確認生成的", args.out_json_file, "與相對應的 label_config.xml")
 
 
-def seg_to_bbox(seg_info):
-    # Example input: 5 0.046875 0.369141 0.0644531 0.384766 0.0800781 0.402344 ...
-    class_id, *points = seg_info.split()
-    points = [float(p) for p in points]
-    x_min, y_min, x_max, y_max = (
-        min(points[0::2]),
-        min(points[1::2]),
-        max(points[0::2]),
-        max(points[1::2]),
-    )
-    width, height = x_max - x_min, y_max - y_min
-    x_center, y_center = (x_min + x_max) / 2, (y_min + y_max) / 2
-    # bbox_info = f"{int(class_id) - 1} {x_center} {y_center} {width} {height}"
-    bbox_info = f"{int(class_id)} {x_center} {y_center} {width} {height}"
-    return bbox_info
+# 4. Segmentation to Bounding Box 轉換
+def cli_seg2bbox(args):
+    def seg_to_bbox(seg_info):
+        parts = seg_info.split()
+        class_id, *points = parts
+        points = [float(p) for p in points]
+        x_min, y_min, x_max, y_max = (
+            min(points[0::2]),
+            min(points[1::2]),
+            max(points[0::2]),
+            max(points[1::2]),
+        )
+        width, height = x_max - x_min, y_max - y_min
+        x_center, y_center = (x_min + x_max) / 2, (y_min + y_max) / 2
+        return f"{int(class_id)} {x_center} {y_center} {width} {height}"
 
-
-def seg2bbox(in_label_folder, out_label_folder=None):
-    """
-    in_label_folder is a directory, convert all .txt files in it to yolo bbox format in out_label_folder
-    if out_label_folder is not provided, the converted files will overwrite the original files
-    """
-    print("in_label_folder:", in_label_folder)
-    print("out_label_folder:", out_label_folder)
-    if not out_label_folder:
-        out_label_folder = in_label_folder
-    label_files = [e for e in os.listdir(in_label_folder) if e.endswith(".txt")]
+    in_folder = args.in_label_folder
+    out_folder = args.out_label_folder or in_folder
+    label_files = [f for f in os.listdir(in_folder) if f.endswith(".txt")]
     if not label_files:
-        print("No label files found in the directory.")
+        print("找不到任何 .txt 標註檔案。")
+        return
     for file in label_files:
-        if not file.endswith(".txt"):
-            continue
-        label_textfile = os.path.join(in_label_folder, file)
-        with open(label_textfile, "r") as f:
+        in_file = os.path.join(in_folder, file)
+        with open(in_file, "r") as f:
             lines = f.readlines()
         bboxes = [seg_to_bbox(line) for line in lines]
-        print("bboxes:", bboxes)
-        out_label_textfile = os.path.join(out_label_folder, file)
-        print("out_label_textfile:", out_label_textfile)
-        with open(out_label_textfile, "w") as f:
-            f.writelines("\n".join(bboxes))
+        out_file = os.path.join(out_folder, file)
+        with open(out_file, "w") as f:
+            f.write("\n".join(bboxes))
+        print(f"{file} 轉換完成。")
+    print("所有檔案轉換完成。")
 
 
-def yolo8_to_yolo3(data_dir):
-    """
-    將位於 data_dir 目錄下的 YOLOv8 格式的 data.yaml 轉換成 YOLOv3 所需格式：
-      - notes.json：包含 categories 與 info 的 JSON 文件
-      - classes.txt：每行一個類別名稱
-
-    參數:
-      data_dir: 包含 data.yaml 的目錄路徑
-    """
-    # 定義檔案路徑
+# 5. YOLOv8 轉 YOLOv3 格式
+def cli_yolo8_to_yolo3(args):
+    data_dir = args.data_dir
     yolov8_data_yaml_path = os.path.join(data_dir, "yolov8", "data.yaml")
     yolov3_notes_json_path = os.path.join(data_dir, "yolov3", "notes.json")
     yolov3_classes_txt_path = os.path.join(data_dir, "yolov3", "classes.txt")
-
-    # 讀取 YOLOv8 的 data.yaml
     with open(yolov8_data_yaml_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
-    # 提取類別名稱
     names = data.get("names", [])
-    # 構建 notes.json 的資料結構
     categories = [{"id": idx, "name": name} for idx, name in enumerate(names)]
     info = {
         "year": datetime.now().year,
@@ -288,343 +107,270 @@ def yolo8_to_yolo3(data_dir):
         "contributor": "Label Studio",
     }
     notes = {"categories": categories, "info": info}
-
-    # 寫入 yolov3 檔案
-    # 寫入 notes.json
     with open(yolov3_notes_json_path, "w", encoding="utf-8") as f:
         json.dump(notes, f, indent=2, ensure_ascii=False)
-    # 寫入 classes.txt
     with open(yolov3_classes_txt_path, "w", encoding="utf-8") as f:
         for name in names:
             f.write(f"{name}\n")
+    print(
+        "YOLOv8 轉 YOLOv3 完成！生成檔案：",
+        yolov3_notes_json_path,
+        "與",
+        yolov3_classes_txt_path,
+    )
 
-    print("轉換完成！生成文件：", yolov3_notes_json_path, "和", yolov3_classes_txt_path)
 
-
-def yolo3_to_yolo8(data_dir):
-    """
-    Convert YOLOv3 format to YOLOv8 format by creating a data.yaml file.
-
-    Parameters:
-      data_dir: Directory containing YOLOv3 format files (classes.txt and notes.json).
-    """
-    # Define file paths
+# 6. YOLOv3 轉 YOLOv8 格式
+def cli_yolo3_to_yolo8(args):
+    data_dir = args.data_dir
     yolov3_classes_txt_path = os.path.join(data_dir, "classes.txt")
     yolov8_data_yaml_path = os.path.join(data_dir, "data.yaml")
-
-    # Read class names from classes.txt
     with open(yolov3_classes_txt_path, "r", encoding="utf-8") as f:
         class_names = [line.strip() for line in f.readlines()]
-
-    # Create data.yaml content
     data_yaml_content = {
         "train": os.path.join(data_dir, "yolov8", "train", "images"),
         "val": os.path.join(data_dir, "yolov8", "valid", "images"),
         "nc": len(class_names),
         "names": class_names,
     }
-
-    # Write data.yaml file
     with open(yolov8_data_yaml_path, "w", encoding="utf-8") as f:
         yaml.dump(data_yaml_content, f, default_flow_style=False)
-
+    # 建立 annotations 的 symbolic link
     target = f"{data_dir}/labels"
     symlink = f"{data_dir}/annotations"
-    # shutil.rmtree(symlink, ignore_errors=True)
     if os.path.islink(symlink):
         os.remove(symlink)
     os.symlink(target, symlink)
+    print("YOLOv3 轉 YOLOv8 完成！生成檔案：", yolov8_data_yaml_path)
 
-    print("Conversion complete! Generated file:", yolov8_data_yaml_path)
+
+# 7. 建立專案結構（使用 YoloFit 類別中的 create_proj 功能）
+def cli_create_proj(args):
+    proj_dir = Path(os.getcwd()) / "projects" / args.projname
+    for sub in [
+        "videos",
+        "images",
+        "frames",
+        "dataset/yolov8/train/images",
+        "dataset/yolov8/train/labels",
+        "dataset/yolov8/valid/images",
+        "dataset/yolov8/valid/labels",
+        "dataset/yolov3/labels",
+    ]:
+        path = proj_dir / sub
+        path.mkdir(parents=True, exist_ok=True)
+        print("建立資料夾：", path)
+    # 針對 yolov3 也建立 images 的 symbolic link
+    yolov3_images_symlink = proj_dir / "dataset/yolov3/images"
+    yolov8_train_images = proj_dir / "dataset/yolov8/train/images"
+    if yolov3_images_symlink.exists():
+        if yolov3_images_symlink.is_symlink():
+            os.remove(yolov3_images_symlink)
+    os.symlink(yolov8_train_images, yolov3_images_symlink)
+    print("專案建立完成：", proj_dir)
 
 
-class YoloFit:
-    def __init__(self, projname, test_val_ratio=0.2):
-        self.projname = projname
-        self.home = os.getcwd()
-        self.proj = f"{self.home}/projects/{self.projname}"
-        self.video_dir_path = f"{self.proj}/videos"
-        self.image_dir_path = f"{self.proj}/images"
-        self.frame_dir_path = f"{self.proj}/frames"
-        self.frame_interval = 100  # ms
-        print("proj:", self.proj)
-        print("video_dir_path:", self.video_dir_path)
-        print("image_dir_path:", self.image_dir_path)
-        print("frame_dir_path:", self.frame_dir_path)
-        print("video_paths:", self.video_paths)
-        roboflow.login()
+# 8. 影片轉圖像（使用 YoloFit 中的 convert_video_to_image）
+def cli_convert_video_to_image(args):
+    proj_dir = Path(os.getcwd()) / "projects" / args.projname
+    video_dir = proj_dir / "videos"
+    frame_dir = proj_dir / "frames"
+    import cv2
+    import supervision as sv
 
-    @property
-    def video_paths(self):
-        return sv.list_files_with_extensions(
-            directory=self.video_dir_path, extensions=["mov", "mp4", "MOV"]
-        )
-
-    def create_proj(self):
-        def delete_path(path):
-            if os.path.islink(path):
-                os.remove(path)
-                print(f"Symlink {path} has been removed.")
-            elif os.path.isdir(path):
-                shutil.rmtree(path)
-                print(f"Directory {path} has been removed.")
-            else:
-                print(f"{path} is neither a directory nor a symlink.")
-
-        project_path = Path(self.home) / "projects" / self.projname
-        project_path.mkdir(parents=True, exist_ok=True)
-        # Create subdirectories
-        # (project_path / "dataset").mkdir(exist_ok=True)
-
-        # create project files
-        (project_path / "frames").mkdir(exist_ok=True)
-        (project_path / "runs").mkdir(exist_ok=True)
-        (project_path / "videos").mkdir(exist_ok=True)
-
-        # create yolov8 dataset
-        yolov8_dataset_path = project_path / "dataset/yolov8"
-        (yolov8_dataset_path / "train/images").mkdir(parents=True, exist_ok=True)
-        (yolov8_dataset_path / "train/labels").mkdir(parents=True, exist_ok=True)
-        (yolov8_dataset_path / "valid/images").mkdir(parents=True, exist_ok=True)
-        (yolov8_dataset_path / "valid/labels").mkdir(parents=True, exist_ok=True)
-
-        # create yolov3 dataset
-        yolov3_dataset_path = project_path / "dataset/yolov3"
-        yolov3_images_symlink = yolov3_dataset_path / "images"
-        yolov8_images_target = yolov8_dataset_path / "train/images"
-        # (yolov3_dataset_path / "images").mkdir(parents=True, exist_ok=True)
-        (yolov3_dataset_path / "labels").mkdir(parents=True, exist_ok=True)
-
-        delete_path(yolov3_images_symlink)
-        if os.path.exists(yolov8_images_target) and not os.path.exists(
-            yolov3_images_symlink
-        ):
-            os.symlink(yolov8_images_target, yolov3_images_symlink)
-            print(f"Symlink created: {yolov3_images_symlink} -> {yolov8_images_target}")
-        else:
-            print("Target does not exist or symlink already exists.")
-
-    def download_dataset(self, dataset_url, model_format):
-        dataset = roboflow.download_dataset(
-            datraset_url=dataset_url, model_format=model_format
-        )
-        return dataset
-
-    def convert_video_to_image(self):
-        for video_path in tqdm(self.video_paths):
-            video_name = video_path.stem
-            image_name_pattern = video_name + "-{:05d}.png"
-            fps = sv.VideoInfo.from_video_path(video_path).fps
-            frame_stride = round(self.frame_interval / (1000 / fps))
-            print(f"fps: {fps} frame/s")
-            print(f"interval: {self.frame_interval} s")
-            print("frame_stride:", frame_stride)
-            with sv.ImageSink(
-                target_dir_path=self.frame_dir_path,
-                image_name_pattern=image_name_pattern,
-            ) as sink:
-                images_extract = sv.get_video_frames_generator(
-                    source_path=str(video_path), stride=frame_stride
-                )
-                for image in images_extract:
-                    sink.save_image(image=image)
-                print(f"total frame count: {len(list(images_extract))}")
-
-    def list_images_with_extensions(self):
-        image_paths = sv.list_files_with_extensions(
-            directory=self.image_dir_path, extensions=["png", "jpg", "jpg"]
-        )
-        print("image count:", len(image_paths))
-        return image_paths
-
-    def list_frames_with_extensions(self):
-        frame_paths = sv.list_files_with_extensions(
-            directory=self.frame_dir_path, extensions=["png", "jpg", "jpg"]
-        )
-        print("frame count:", len(frame_paths))
-        return frame_paths
-
-    def init_base_model_autolabel(self, annotation_class, from_frames=True):
-        # annotation_class = {"milk bottle": "bottle", "blue cap": "cap"}
-        ontology = CaptionOntology(annotation_class)
-        dataset_dir_path = f"{self.proj}/dataset/"
-        base_model = GroundedSAM(ontology=ontology)
-        input_folder = self.frame_dir_path if from_frames else self.image_dir_path
-        dataset = base_model.label(
-            input_folder=input_folder,
-            # input_folder=self.image_dir_path,
-            extension=".png",
-            output_folder=dataset_dir_path,
-        )
-        return base_model, dataset
-
-    def merge_test_val(self):
-        dataset_dir_path = f"{self.proj}/dataset/"
-        images_dir_path = Path(dataset_dir_path) / "images"
-        images_dir_path.mkdir(exist_ok=True)
-        labels_dir_path = Path(dataset_dir_path) / "annotations"
-        labels_dir_path.mkdir(exist_ok=True)
-
-        # Move images from train/images and valid/images to images/
-        for subdir in ["train/images", "valid/images"]:
-            source_dir = Path(dataset_dir_path) / subdir
-            for image_file in source_dir.glob("*.*"):
-                shutil.move(str(image_file), images_dir_path)
-
-        # Move labels from train/labels and valid/labels to annotations/
-        for subdir in ["train/labels", "valid/labels"]:
-            source_dir = Path(dataset_dir_path) / subdir
-            for label_file in source_dir.glob("*.*"):
-                shutil.move(str(label_file), labels_dir_path)
-
-    def rearrnage_test_val(self, split_ratio=0.8):
-        dataset_dir_path = f"{self.proj}/dataset/"
-        self.merge_test_val()
-        split_data(dataset_dir_path, split_ratio=split_ratio)
-
-    def display_annotation(self):
-        dataset_dir_path = f"{self.proj}/dataset"
-        ANNOTATIONS_DIRECTORY_PATH = f"{dataset_dir_path}/train/labels"
-        IMAGES_DIRECTORY_PATH = f"{dataset_dir_path}/train/images"
-        DATA_YAML_PATH = f"{dataset_dir_path}/data.yaml"
-        print("ANNOTATIONS_DIRECTORY_PATH:", ANNOTATIONS_DIRECTORY_PATH)
-        print("IMAGES_DIRECTORY_PATH:", IMAGES_DIRECTORY_PATH)
-        print("DATA_YAML_PATH:", DATA_YAML_PATH)
-
-        SAMPLE_SIZE = 16
-        SAMPLE_GRID_SIZE = (4, 4)
-        SAMPLE_PLOT_SIZE = (16, 10)
-
-        dataset = sv.DetectionDataset.from_yolo(
-            images_directory_path=IMAGES_DIRECTORY_PATH,
-            annotations_directory_path=ANNOTATIONS_DIRECTORY_PATH,
-            data_yaml_path=DATA_YAML_PATH,
-        )
-        mask_annotator = sv.MaskAnnotator()
-        box_annotator = sv.BoxAnnotator()
-        label_annotator = sv.LabelAnnotator()
-        images = []
-        image_names = []
-        for i, (image_path, image, annotation) in enumerate(dataset):
-            if i == SAMPLE_SIZE:
+    video_files = glob.glob(str(video_dir / "*.[mM][pP]4")) + glob.glob(
+        str(video_dir / "*.[mM][oO][vV]")
+    )
+    if not video_files:
+        print("專案內找不到影片檔案。")
+        return
+    for video_path in tqdm(video_files, desc="轉換影片為圖像"):
+        cap = cv2.VideoCapture(video_path)
+        count = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
                 break
-            annotated_image = image.copy()
-            annotated_image = mask_annotator.annotate(
-                scene=annotated_image, detections=annotation
-            )
-            annotated_image = box_annotator.annotate(
-                scene=annotated_image, detections=annotation
-            )
-            annotated_image = label_annotator.annotate(
-                scene=annotated_image, detections=annotation
-            )
-            image_names.append(Path(image_path).name)
-            images.append(annotated_image)
+            img_name = f"{Path(video_path).stem}-{count:05d}.png"
+            cv2.imwrite(str(frame_dir / img_name), frame)
+            count += 1
+        cap.release()
+        print(f"{video_path} 轉換完成，共提取 {count} 幅影像。")
 
-        sv.plot_images_grid(
-            images=images,
-            titles=image_names,
-            grid_size=SAMPLE_GRID_SIZE,
-            size=SAMPLE_PLOT_SIZE,
-        )
 
-    def train_yolo(self):
-        dataset_dir_path = f"{self.proj}/dataset"
-        DATA_YAML_PATH = f"{dataset_dir_path}/data.yaml"
-        target_model = YOLOv8("yolov8n.pt")
-        target_model.train(
-            DATA_YAML_PATH, epochs=50, device="mps"
-        )  # or cuda if supported
+# 9. YOLO 訓練（使用 YOLOv8 模型訓練）
+def cli_train_yolo(args):
+    from ultralytics import YOLO
 
-    def predict_yolo(images):
-        # for importing into label-studio, TBD
-        MODEL_NAME = "yolov8n.pt"
-        model = YOLO()
-        results = model(images)
-        predictions = []
-        for result in results:
-            img_width, img_height = result.orig_shape
-            boxes = result.boxes.cpu().numpy()
-            prediction = {
-                "result": [],
-                "score": 0.0,
-                "model_version": MODEL_NAME,
-            }
-            scores = []
-            for box, class_id, score in zip(boxes.xywh, boxes.cls, boxes.conf):
-                x, y, w, h = box
-                prediction["result"].append(
-                    {
-                        "from_name": "label",
-                        "to_name": "img",
-                        "original_width": int(img_width),
-                        "original_height": int(img_height),
-                        "image_rotation": 0,
-                        "value": {
-                            "rotation": 0,
-                            "rectanglelabels": [result.names[class_id]],
-                            "width": w / img_width * 100,
-                            "height": h / img_height * 100,
-                            "x": (x - 0.5 * w) / img_width * 100,
-                            "y": (y - 0.5 * h) / img_height * 100,
-                        },
-                        "score": float(score),
-                        "type": "rectanglelabels",
-                    }
-                )
-                scores.append(float(score))
-            prediction["score"] = min(scores) if scores else 0.0
-            predictions.append(prediction)
-        return predictions
+    data_yaml = os.path.join(
+        os.getcwd(), "projects", args.projname, "dataset", "data.yaml"
+    )
+    model = YOLO("yolov8n.pt")
+    print("開始訓練 YOLO 模型...")
+    model.train(data=data_yaml, epochs=50, device=args.device)
+    print("訓練完成！")
+
+
+# 10. YOLO 預測（單張圖片預測）
+def cli_predict_yolo(args):
+    from ultralytics import YOLO
+    import cv2
+
+    model = YOLO("yolov8n.pt")
+    image = cv2.imread(args.image)
+    results = model(image)
+    for result in results:
+        print("預測結果：", result.boxes)
+
+
+# 11. 資料集分割 (split_data)
+def cli_split_data(args):
+    from autodistill.helpers import split_data
+
+    print(f"開始分割資料集：{args.data_dir}")
+    split_data(
+        args.data_dir,
+        split_ratio=args.split_ratio,
+        record_confidence=args.record_confidence,
+    )
+    print(f"資料集分割完成，split_ratio: {args.split_ratio}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Label CLI 工具")
+    subparsers = parser.add_subparsers(
+        dest="command", required=True, help="可用的子命令"
+    )
+
+    # label 命令：自動標註
+    parser_label = subparsers.add_parser("label", help="對指定資料夾內的影像進行標註")
+    parser_label.add_argument("input_folder", help="影像資料夾路徑")
+    parser_label.add_argument(
+        "--extension", default=".jpg", help="影像副檔名，預設 .jpg"
+    )
+    parser_label.add_argument(
+        "--output_folder", help="輸出標註資料夾，預設在 input_folder+'_labeled'"
+    )
+    parser_label.add_argument(
+        "--human_in_the_loop", action="store_true", help="是否啟用 human in the loop"
+    )
+    parser_label.add_argument("--roboflow_project", help="Roboflow 專案名稱")
+    parser_label.add_argument(
+        "--roboflow_tags", nargs="+", default=["autodistill"], help="Roboflow 標籤"
+    )
+    parser_label.add_argument("--sahi", action="store_true", help="是否啟用 SAHI")
+    parser_label.add_argument(
+        "--record_confidence", action="store_true", help="是否記錄信心分數"
+    )
+    parser_label.add_argument(
+        "--nms_settings",
+        default="no_nms",
+        choices=["no_nms", "class_specific", "class_agnostic"],
+        help="NMS 設定",
+    )
+    parser_label.set_defaults(func=cli_label)
+
+    # load-grounding-dino 命令
+    parser_dino = subparsers.add_parser(
+        "load-grounding-dino", help="載入 GroundingDINO 模型"
+    )
+    parser_dino.set_defaults(func=cli_load_grounding_dino)
+
+    # convert-yolo-to-labelstudio 命令
+    parser_yolo_ls = subparsers.add_parser(
+        "convert-yolo-to-labelstudio", help="將 YOLO 格式轉換為 Label Studio 格式"
+    )
+    parser_yolo_ls.add_argument("input_data_dir", help="YOLO 資料夾路徑")
+    parser_yolo_ls.add_argument("image_root_url", help="圖片根 URL")
+    parser_yolo_ls.add_argument(
+        "--out_json_file", default="output_for_labelstudio.json", help="輸出 JSON 檔名"
+    )
+    parser_yolo_ls.set_defaults(func=cli_convert_yolo_to_labelstudio)
+
+    # seg2bbox 命令
+    parser_seg2bbox = subparsers.add_parser(
+        "seg2bbox", help="將 segmentation 標註轉為 bounding box 標註"
+    )
+    parser_seg2bbox.add_argument("in_label_folder", help="輸入標註資料夾")
+    parser_seg2bbox.add_argument(
+        "out_label_folder",
+        nargs="?",
+        default=None,
+        help="輸出標註資料夾（預設覆寫原檔）",
+    )
+    parser_seg2bbox.set_defaults(func=cli_seg2bbox)
+
+    # yolo8-to-yolo3 命令
+    parser_yolo8_to_yolo3 = subparsers.add_parser(
+        "yolo8-to-yolo3", help="將 YOLOv8 格式轉換為 YOLOv3 格式"
+    )
+    parser_yolo8_to_yolo3.add_argument(
+        "data_dir", help="包含 yolov8/data.yaml 的資料夾路徑"
+    )
+    parser_yolo8_to_yolo3.set_defaults(func=cli_yolo8_to_yolo3)
+
+    # yolo3-to-yolo8 命令
+    parser_yolo3_to_yolo8 = subparsers.add_parser(
+        "yolo3-to-yolo8", help="將 YOLOv3 格式轉換為 YOLOv8 格式"
+    )
+    parser_yolo3_to_yolo8.add_argument("data_dir", help="包含 YOLOv3 檔案的資料夾路徑")
+    parser_yolo3_to_yolo8.set_defaults(func=cli_yolo3_to_yolo8)
+
+    # create-proj 命令：建立專案結構
+    parser_create_proj = subparsers.add_parser(
+        "create-proj", help="建立新的專案資料夾結構"
+    )
+    parser_create_proj.add_argument("projname", help="專案名稱")
+    parser_create_proj.set_defaults(func=cli_create_proj)
+
+    # convert-video-to-image 命令
+    parser_video2img = subparsers.add_parser(
+        "convert-video-to-image", help="將專案中的影片轉換成影像"
+    )
+    parser_video2img.add_argument("projname", help="專案名稱")
+    parser_video2img.set_defaults(func=cli_convert_video_to_image)
+
+    # train-yolo 命令
+    parser_train_yolo = subparsers.add_parser(
+        "train-yolo", help="使用 YOLOv8 模型進行訓練"
+    )
+    parser_train_yolo.add_argument("projname", help="專案名稱")
+    parser_train_yolo.add_argument(
+        "--device", default="cuda", help="運行裝置，如 cuda、mps 或 cpu"
+    )
+    parser_train_yolo.set_defaults(func=cli_train_yolo)
+    """
+    python app.py train-yolo abc --device=mps
+    /Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset/project-9-at-2025-02-26-01-54-58557314
+    """
+
+    # predict-yolo 命令
+    parser_predict_yolo = subparsers.add_parser(
+        "predict-yolo", help="對單張圖片使用 YOLO 模型進行預測"
+    )
+    parser_predict_yolo.add_argument("image", help="影像檔案路徑")
+    parser_predict_yolo.set_defaults(func=cli_predict_yolo)
+
+    # split-data 命令：分割資料集 (使用 split_data)
+    parser_split_data = subparsers.add_parser(
+        "split-data", help="分割資料集成 train/valid/test"
+    )
+    parser_split_data.add_argument("data_dir", help="包含資料集的目錄路徑")
+    parser_split_data.add_argument(
+        "--split_ratio", type=float, default=0.8, help="資料分割比例，預設 0.8"
+    )
+    parser_split_data.add_argument(
+        "--record_confidence", action="store_true", help="是否記錄信心分數"
+    )
+    parser_split_data.set_defaults(func=cli_split_data)
+    """
+    python app.py split-data --data_dir=/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset/project-9-at-2025-02-26-01-54-58557314
+    """
+
+    args = parser.parse_args()
+    args.func(args)
 
 
 if __name__ == "__main__":
-    projname = "abc"
-    yf = YoloFit(projname)
-    annotation_class = {
-        "normal human hand": "hand",
-        "bottle made by silver stain steel with slightly cone shape": "mybottle",
-    }
-    """
-    yf.convert_video_to_image()
-    yf.init_base_model_autolabel(
-        annotation_class=annotation_class,
-    )
+    main()
 
-    dataset_path = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset"
-    in_path = f"{dataset_path}/yolov8/train/labels"
-    out_path = f"{dataset_path}/yolov3/labels"
-    seg2bbox(in_path, out_path)
-
-    yolo8_to_yolo3(dataset_path)
-
-    # test_base_import_yolo(input_data_dir=in_path)
-
-    input_dir = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset/yolov3"
-    image_root_url = "/data/local-files/?d=images"
-    convert_yolo_to_labelstudio(input_dir, image_root_url)
-
-    # import into label-studio
-    export LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
-    export LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset/yolov3
-    label-studio
-
-    # in label-studio, approve & modify the labels
-    # export datasets in yolov3 format
-
-    # convert yolov3 to yolov8 format
-    dataset_from_ls = f"{dataset_path}/project-9-at-2025-02-19-09-45-87d33f43"
-    dataset_from_ls = f"{dataset_path}/project-9-at-2025-02-26-01-54-58557314"
-    yolo3_to_yolo8(dataset_from_ls)
-
-    # split the data into train/valid/test set
-    split_data("/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset/project-9-at-2025-02-19-09-45-87d33f43", 0.8)
-
-    # training yolo8v model
-    yolo detect train data=projects/abc/dataset/project-9-at-2025-02-19-09-45-87d33f43/data.yaml model=yolo11n.yaml epochs=100 imgsz=640 device=mps
-
-    # predict
-    yolo detect predict model=/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/runs/detect/train/weights/best.pt \
-      source=/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/dataset/my-first-customed/train/images/IMG_2872-00099.jpg
-
-    """

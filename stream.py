@@ -5,8 +5,9 @@ import cv2
 
 model = YOLO(
     # "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/runs/detect/train/weights/best.pt"
-    "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/runs/detect/train8/weights/best.pt",
     # "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/my-first-customed/runs/detect/train/weights/best.pt"
+    # "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/runs/detect/train8/weights/best.pt",
+    "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/runs/detect/train9/weights/best.pt"
 )
 
 print("...2")
@@ -49,8 +50,8 @@ while cap.isOpened():
                     2,
                 )
                 print(f"hand:  {conf:.2f}")
-            # elif cls == 1 and conf > conf_threshold:  # cls == 0 表示 "person"
-            elif cls == 1 and conf > 0.5:  # cls == 0 表示 "person"
+            elif cls == 1 and conf > conf_threshold:  # cls == 0 表示 "person"
+                # elif cls == 1 and conf > 0.5:  # cls == 0 表示 "person"
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 cv2.putText(
                     frame,
