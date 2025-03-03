@@ -7,7 +7,7 @@ model = YOLO(
     # "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/runs/detect/train/weights/best.pt"
     # "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/my-first-customed/runs/detect/train/weights/best.pt"
     # "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/runs/detect/train8/weights/best.pt",
-    "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/runs/detect/train9/weights/best.pt"
+    "runs/detect/train9/weights/best.pt"
 )
 
 print("...2")
