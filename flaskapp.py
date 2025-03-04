@@ -18,6 +18,16 @@ def gen_frames():
     picam2.configure(config)
     picam2.start()
     time.sleep(0.5)  # 預熱時間
+    picam2.set_controls({"FrameDurationLimits": (66667, 66667)})
+
+    print("目前解析度：", config["main"]["size"])
+    metadata = picam2.capture_metadata()
+    frame_duration = metadata.get("FrameDuration", None)
+    if frame_duration:
+        frame_rate = 1e6 / frame_duration  # 1,000,000 微秒除以每幀時間
+        print("目前幀率：", frame_rate, "fps")
+    else:
+        print("無法取得 FrameDuration 資訊")
 
     try:
         while True:
