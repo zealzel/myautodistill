@@ -16,16 +16,12 @@ device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 # device = torch.device("cpu")
 print(f"Using device: {device}")
 
-# convert model to ncnn format
-# yolo export model=runs/detect/train9/weights/best.pt format=ncnn
-
 model = YOLO(
     # "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/runs/detect/train/weights/best.pt"
     # "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/my-first-customed/runs/detect/train/weights/best.pt"
     # "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/runs/detect/train8/weights/best.pt",
-    # "runs/detect/train8/weights/best_ncnn_model"
-    "runs/detect/train8/weights/best.pt"
     # "runs/detect/train9/weights/best.pt"
+    "runs/detect/train8/weights/best_ncnn_model"
 )
 # model.to(device)
 
@@ -46,9 +42,9 @@ while cap.isOpened():
     if not ret:
         break
 
-    # 進行人物偵測
-    results = model(frame, verbose=False)
-
+    resized_frame = cv2.resize(frame, (640, 480))
+    results = model(resized_frame, verbose=False)
+    # results = model(frame, verbose=False)
     conf_threshold = 0.7
 
     # 繪製偵測結果
@@ -58,9 +54,9 @@ while cap.isOpened():
             conf = box.conf[0].item()
             cls = int(box.cls[0])
             if cls == 0 and conf > conf_threshold:  # cls == 0 表示 "person"
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.rectangle(resized_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 cv2.putText(
-                    frame,
+                    resized_frame,
                     f"Hand {conf:.2f}",
                     (x1, y1 - 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
@@ -70,9 +66,10 @@ while cap.isOpened():
                 )
                 print(f"hand:  {conf:.2f}")
             elif cls == 1 and conf > conf_threshold:  # cls == 0 表示 "person"
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                # elif cls == 1 and conf > 0.5:  # cls == 0 表示 "person"
+                cv2.rectangle(resized_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 cv2.putText(
-                    frame,
+                    resized_frame,
                     f"My Bottle {conf:.2f}",
                     (x1, y1 - 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
@@ -82,7 +79,7 @@ while cap.isOpened():
                 )
                 print(f"bottle:  {conf:.2f}")
 
-    cv2.imshow("my bottle detection", frame)
+    cv2.imshow("my bottle detection", resized_frame)
     key = cv2.waitKey(1) & 0xFF
 
     if key == ord("s"):

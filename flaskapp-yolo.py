@@ -8,23 +8,31 @@ import os
 app = Flask(__name__)
 
 # Load the YOLO model
-model = YOLO("runs/detect/train9/weights/best.pt")
+# model = YOLO("runs/detect/train9/weights/best.pt")
+model = YOLO("runs/detect/train9/weights/best_ncnn_model")
+# model = YOLO("best_ncnn_model")
 
 # Define the video capture object
 # cap = cv2.VideoCapture(0)  # Use 0 for Mac's built-in camera or 1 for an external camera
 
 picam2 = Picamera2()
+
+modes = picam2.sensor_modes
+mode = modes[0]
+print("mode:", mode)
+print("raw: ", picam2.camera_configuration()["raw"])
+
+config = picam2.create_preview_configuration({"size": (1280, 960)})
 # config = picam2.create_preview_configuration({"size": (640, 480)})
-config = picam2.create_preview_configuration({"size": (160, 120)})
 # config = picam2.create_preview_configuration({"size": (320, 240)})
+# config = picam2.create_preview_configuration({"size": (160, 120)})
 picam2.configure(config)
 print("目前解析度：", config["main"]["size"])
-picam2.start()
-time.sleep(0.5)  # 預熱時間
 # picam2.set_controls({"FrameDurationLimits": (66667, 66667)})
 # picam2.set_controls({"FrameDurationLimits": (33333, 100000)})
-# picam2.set_controls({"FrameRate": 15})
-
+picam2.set_controls({"FrameRate": 10})
+picam2.start()
+time.sleep(0.5)  # 預熱時間
 
 metadata = picam2.capture_metadata()
 frame_duration = metadata.get("FrameDuration", None)
@@ -42,17 +50,11 @@ frame_count = 0
 
 def gen_frames():
     global frame_count
-    conf_threshold = 0.7  # Confidence threshold for detections
+    conf_threshold = 0.8  # Confidence threshold for detections
+    conf_threshold_bottle = 0.3  # Confidence threshold for detections
     target_interval = 1 / 15  # 目標每幀時間（秒）
-    # target_interval = 1 / 5  # 目標每幀時間（秒）
 
     while True:
-        start_time = time.time()
-        # frame_count += 1
-        # # 每4幀只處理1幀
-        # # if frame_count % 4 != 0:
-        # if frame_count % 10 != 0:
-        #     continue
         try:
             # 捕獲影像 (返回 numpy array)
             frame = picam2.capture_array()
@@ -74,7 +76,9 @@ def gen_frames():
                 if cls == 0 and conf > conf_threshold:  # cls == 0 indicates "hand"
                     label = f"Hand {conf:.2f}"
                     color = (0, 255, 0)
-                elif cls == 1 and conf > conf_threshold:  # cls == 1 indicates "bottle"
+                elif (
+                    cls == 1 and conf > conf_threshold_bottle
+                ):  # cls == 1 indicates "bottle"
                     label = f"My Bottle {conf:.2f}"
                     color = (255, 0, 0)
                 else:
@@ -96,14 +100,6 @@ def gen_frames():
         if not ret:
             continue
         jpg_bytes = buffer.tobytes()
-
-        # 控制傳輸頻率
-        # elapsed = time.time() - start_time
-        # print("elapsed:", elapsed)
-        # sleep_time = target_interval - elapsed
-        # if sleep_time > 0:
-        #     # print("sleep_time!", sleep_time)
-        #     time.sleep(sleep_time)
 
         yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpg_bytes + b"\r\n")
 
