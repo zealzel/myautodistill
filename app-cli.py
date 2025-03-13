@@ -17,6 +17,7 @@ from autodistill.helpers import split_data
 from autodistill.detection import CaptionOntology, DetectionBaseModel
 
 # from groundingdino.util.inference import Model # not used now
+from ultralytics import YOLO
 from autodistill_yolov8 import YOLOv8
 
 # from autodistill_grounded_sam import GroundedSAM # move into class method
@@ -116,6 +117,16 @@ def my_detection_label(
 
 
 DetectionBaseModel.label = my_detection_label
+
+
+# def my_yolo_train(self, dataset_yaml, proj_dir, epochs=200, device="cpu"):
+def my_yolo_train(self, dataset_yaml, project, epochs=200, device="cpu"):
+    print("my_yolo_train")
+    self.yolo.train(data=dataset_yaml, epochs=epochs, device=device, project=project)
+    # self.yolo.train(data=dataset_yaml, epochs=epochs, device=device)
+
+
+YOLOv8.train = my_yolo_train
 
 
 def seg_to_bbox(seg_info):
@@ -440,12 +451,14 @@ class YoloCLI:
             epochs: 訓練回合數，預設 50
             device: 運算裝置，預設 'mps'
         """
+        proj_dir = Path(os.getcwd()) / "projects" / projname
         data_yaml = (
             Path(os.getcwd()) / f"projects/{projname}/dataset/reviewed/data.yaml"
         )
         model = YOLOv8("yolov8n.pt")
         print(f"開始訓練 YOLO 模型，使用裝置: {device}")
-        model.train(str(data_yaml), epochs=epochs, device=device)
+        # model.train(str(data_yaml), epochs=epochs, device=device)
+        model.train(str(data_yaml), epochs=epochs, device=device, project=str(proj_dir))
         print("訓練完成！")
 
     def display_annotation(self, projname):
