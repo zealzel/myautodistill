@@ -540,6 +540,9 @@ if __name__ == "__main__":
     - review
     - export
 
+    # unzip exported and rename
+    project-11-at-2025-03-13-05-50-caf27874.zip -> unzip to reviewed/ folder
+
     python app-cli.py convert_format proj1 yolo3 yolo8
 
     # split the data into train/valid/test set
