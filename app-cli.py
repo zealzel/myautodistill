@@ -381,6 +381,33 @@ class YoloCLI:
 
         print("YOLOv3 轉 YOLOv8 完成")
 
+    def convert_yolo_to_labelstudio(self, projname):
+        """Tests generated config and json files for yolo imports
+        test_import_yolo_data folder assumes only images in the 'images' folder
+        with corresponding labels existing in the 'labes' dir and a 'classes.txt' present.
+        ex:
+        input_dir = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset/yolov3"
+        image_root_url = "/data/local-files/?d=images"
+        """
+        proj_dir = Path(os.getcwd()) / "projects" / projname
+        dataset_dir_path = proj_dir / "dataset"
+        input_data_dir = str(dataset_dir_path / "yolov3")
+        # image_root_url = "/data/local-files/?d=images"
+        image_root_url = "/data/local-files/?d=yolov3/images"
+        out_json_file = "output_for_labelstudio.json"
+        image_ext = ".jpg,.jpeg,.png"  # comma seperated string of extns.
+        # input_dir: directory with YOLO where images, labels, notes.json are located
+        import_yolo.convert_yolo_to_ls(
+            input_dir=input_data_dir,
+            out_file=out_json_file,
+            image_ext=image_ext,
+            image_root_url=image_root_url,
+        )
+        out_config_file = f"{out_json_file[:-5]}.label_config.xml"
+        assert os.path.exists(out_config_file) and os.path.exists(out_json_file), (
+            "> import failed! files not generated."
+        )
+
     def train(self, projname: str, epochs: int = 50, device: str = "cuda"):
         """訓練 YOLO 模型
 
@@ -459,5 +486,9 @@ if __name__ == "__main__":
     python app-cli.py display_annotation proj1
 
     python app-cli.py seg2bbox proj1
+
+    python app-cli.py convert_format proj1 yolo8 yolo3
+
+    python app-cli.py convert_yolo_to_labelstudio proj1
 
     """
