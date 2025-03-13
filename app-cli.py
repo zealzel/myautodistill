@@ -458,7 +458,12 @@ class YoloCLI:
         model = YOLOv8("yolov8n.pt")
         print(f"開始訓練 YOLO 模型，使用裝置: {device}")
         # model.train(str(data_yaml), epochs=epochs, device=device)
-        model.train(str(data_yaml), epochs=epochs, device=device, project=str(proj_dir))
+        model.train(
+            str(data_yaml),
+            epochs=epochs,
+            device=device,
+            project=str(proj_dir / "runs/detect"),
+        )
         print("訓練完成！")
 
     def display_annotation(self, projname):
