@@ -118,6 +118,23 @@ def my_detection_label(
 DetectionBaseModel.label = my_detection_label
 
 
+def seg_to_bbox(seg_info):
+    # Example input: 5 0.046875 0.369141 0.0644531 0.384766 0.0800781 0.402344 ...
+    class_id, *points = seg_info.split()
+    points = [float(p) for p in points]
+    x_min, y_min, x_max, y_max = (
+        min(points[0::2]),
+        min(points[1::2]),
+        max(points[0::2]),
+        max(points[1::2]),
+    )
+    width, height = x_max - x_min, y_max - y_min
+    x_center, y_center = (x_min + x_max) / 2, (y_min + y_max) / 2
+    # bbox_info = f"{int(class_id) - 1} {x_center} {y_center} {width} {height}"
+    bbox_info = f"{int(class_id)} {x_center} {y_center} {width} {height}"
+    return bbox_info
+
+
 class YoloCLI:
     """YOLO 工具的命令列介面"""
 
@@ -240,7 +257,8 @@ class YoloCLI:
             from_frames: 是否從 frames 資料夾讀取圖片，預設為 True
         """
         proj_dir = Path(os.getcwd()) / "projects" / projname
-        dataset_dir = proj_dir / "dataset"
+        # dataset_dir = proj_dir / "dataset"
+        dataset_dir = proj_dir / "dataset" / "yolov8"
 
         if type(annotation_class) is str:
             annotation_class = json.loads(annotation_class)
@@ -256,6 +274,39 @@ class YoloCLI:
         )
         print("自動標註完成")
         return dataset
+
+    def seg2bbox(self, projname):
+        """
+        projname: 專案名稱
+        in_label_folder is a directory, convert all .txt files in it to yolo bbox format in out_label_folder
+        if out_label_folder is not provided, the converted files will overwrite the original files
+
+        dataset_path = "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/projname/dataset"
+        in_path = f"{dataset_path}/yolov8/train/labels"
+        out_path = f"{dataset_path}/yolov3/labels"
+        """
+        dataset_dir = Path(os.getcwd()) / "projects" / projname / "dataset"
+        in_label_folder = dataset_dir / "yolov8" / "train" / "labels"
+        out_label_folder = dataset_dir / "yolov3" / "labels"
+        print("in_label_folder:", in_label_folder)
+        print("out_label_folder:", out_label_folder)
+        if not out_label_folder:
+            out_label_folder = in_label_folder
+        label_files = [e for e in os.listdir(in_label_folder) if e.endswith(".txt")]
+        if not label_files:
+            print("No label files found in the directory.")
+        for file in label_files:
+            if not file.endswith(".txt"):
+                continue
+            label_textfile = os.path.join(in_label_folder, file)
+            with open(label_textfile, "r") as f:
+                lines = f.readlines()
+            bboxes = [seg_to_bbox(line) for line in lines]
+            print("bboxes:", bboxes)
+            out_label_textfile = os.path.join(out_label_folder, file)
+            print("out_label_textfile:", out_label_textfile)
+            with open(out_label_textfile, "w") as f:
+                f.writelines("\n".join(bboxes))
 
     def convert_format(self, projname: str, source: str, target: str):
         """轉換不同的 YOLO 格式
@@ -404,4 +455,9 @@ if __name__ == "__main__":
         'normal human hand': 'hand',
         'bottle made by silver stain steel with slightly cone shape': 'mybottle'
     }"
+
+    python app-cli.py display_annotation proj1
+
+    python app-cli.py seg2bbox proj1
+
     """
