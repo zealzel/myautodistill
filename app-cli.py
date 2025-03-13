@@ -344,6 +344,53 @@ class YoloCLI:
         model.train(str(data_yaml), epochs=epochs, device=device)
         print("訓練完成！")
 
+    def display_annotation(self, projname):
+        proj_dir = Path(os.getcwd()) / "projects" / projname
+        dataset_dir_path = str(proj_dir / "dataset")
+        ANNOTATIONS_DIRECTORY_PATH = f"{dataset_dir_path}/train/labels"
+        IMAGES_DIRECTORY_PATH = f"{dataset_dir_path}/train/images"
+        DATA_YAML_PATH = f"{dataset_dir_path}/data.yaml"
+        print("ANNOTATIONS_DIRECTORY_PATH:", ANNOTATIONS_DIRECTORY_PATH)
+        print("IMAGES_DIRECTORY_PATH:", IMAGES_DIRECTORY_PATH)
+        print("DATA_YAML_PATH:", DATA_YAML_PATH)
+
+        SAMPLE_SIZE = 16
+        SAMPLE_GRID_SIZE = (4, 4)
+        SAMPLE_PLOT_SIZE = (16, 10)
+
+        dataset = sv.DetectionDataset.from_yolo(
+            images_directory_path=IMAGES_DIRECTORY_PATH,
+            annotations_directory_path=ANNOTATIONS_DIRECTORY_PATH,
+            data_yaml_path=DATA_YAML_PATH,
+        )
+        mask_annotator = sv.MaskAnnotator()
+        box_annotator = sv.BoxAnnotator()
+        label_annotator = sv.LabelAnnotator()
+        images = []
+        image_names = []
+        for i, (image_path, image, annotation) in enumerate(dataset):
+            if i == SAMPLE_SIZE:
+                break
+            annotated_image = image.copy()
+            annotated_image = mask_annotator.annotate(
+                scene=annotated_image, detections=annotation
+            )
+            annotated_image = box_annotator.annotate(
+                scene=annotated_image, detections=annotation
+            )
+            annotated_image = label_annotator.annotate(
+                scene=annotated_image, detections=annotation
+            )
+            image_names.append(Path(image_path).name)
+            images.append(annotated_image)
+
+        sv.plot_images_grid(
+            images=images,
+            titles=image_names,
+            grid_size=SAMPLE_GRID_SIZE,
+            size=SAMPLE_PLOT_SIZE,
+        )
+
 
 if __name__ == "__main__":
     fire.Fire(YoloCLI)
@@ -352,6 +399,7 @@ if __name__ == "__main__":
 
     python app.py convert_video proj1
 
+    python app-cli.py auto_label_test proj1 "{
     python app-cli.py auto_label proj1 "{
         'normal human hand': 'hand',
         'bottle made by silver stain steel with slightly cone shape': 'mybottle'
