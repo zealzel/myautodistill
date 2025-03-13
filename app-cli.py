@@ -255,6 +255,14 @@ class YoloCLI:
                 pbar.close()
                 print(f"實際擷取影格數: {saved_count}")
 
+    def yolo8_to_labelstudio(self, projname):
+        # python app-cli.py seg2bbox proj1
+        # python app-cli.py convert_format proj1 yolo8 yolo3
+        # python app-cli.py convert_yolo_to_labelstudio proj1
+        self.seg2bbox(projname)
+        self.convert_format(projname, "yolo8", "yolo3")
+        self.convert_yolo_to_labelstudio(projname)
+
     def auto_label_test(
         self, projname: str, annotation_class: dict, from_frames: bool = True
     ):
@@ -468,7 +476,8 @@ class YoloCLI:
 
     def display_annotation(self, projname):
         proj_dir = Path(os.getcwd()) / "projects" / projname
-        dataset_dir_path = str(proj_dir / "dataset")
+        # dataset_dir_path = str(proj_dir / "dataset")
+        dataset_dir_path = str(proj_dir / "dataset/yolov8")
         ANNOTATIONS_DIRECTORY_PATH = f"{dataset_dir_path}/train/labels"
         IMAGES_DIRECTORY_PATH = f"{dataset_dir_path}/train/images"
         DATA_YAML_PATH = f"{dataset_dir_path}/data.yaml"
@@ -517,9 +526,9 @@ class YoloCLI:
 if __name__ == "__main__":
     fire.Fire(YoloCLI)
     """usage
-    python app.py create_proj proj1
+    python app-cli.py create_proj proj1
 
-    python app.py convert_video proj1
+    python app-cli.py convert_video proj1
 
     python app-cli.py auto_label_test proj1 "{
     python app-cli.py auto_label proj1 "{
@@ -530,10 +539,10 @@ if __name__ == "__main__":
     python app-cli.py display_annotation proj1
 
     python app-cli.py seg2bbox proj1
-
     python app-cli.py convert_format proj1 yolo8 yolo3
-
     python app-cli.py convert_yolo_to_labelstudio proj1
+    or
+    python app-cli.py yolo8_to_labelstudio proj1
 
     # actions in lable-studio
     - import
