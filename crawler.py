@@ -144,6 +144,32 @@ def get_image_count(save_dir):
     )
 
 
+def delete_images(save_dir="./downloaded_images"):
+    """
+    刪除指定資料夾中的所有圖片檔案。
+    """
+    if not os.path.exists(save_dir):
+        print(f"資料夾 {save_dir} 不存在。")
+        return
+
+    for filename in os.listdir(save_dir):
+        file_path = os.path.join(save_dir, filename)
+        if os.path.isfile(file_path) and filename.lower().endswith(
+            (".jpg", ".jpeg", ".png", "php")
+        ):
+            try:
+                os.remove(file_path)
+                print(f"已刪除圖片：{file_path}")
+            except Exception as e:
+                print(f"刪除圖片失敗：{file_path}，錯誤：{e}")
+
+    # delete content of downloaded_hashes.txt
+    if os.path.exists("downloaded_hashes.txt"):
+        os.remove("downloaded_hashes.txt")
+    if os.path.exists("downloaded_links.txt"):
+        os.remove("downloaded_links.txt")
+
+
 def fetch_images(query, target_num=20, save_dir="./downloaded_images", max_attempts=10):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -177,6 +203,23 @@ def fetch_images(query, target_num=20, save_dir="./downloaded_images", max_attem
 
 
 if __name__ == "__main__":
-    description = input("請輸入物品描述：")
-    fetch_images(description, target_num=30)
+    while True:
+        print("\n選單:")
+        print("1. 下載圖片")
+        print("2. 刪除所有圖片")
+        print("3. 退出")
+        choice = input("請選擇一個選項 (1/2/3): ")
+
+        if choice == "1":
+            description = input("請輸入物品描述：")
+            target_num = int(input("請輸入目標圖片數量："))
+            fetch_images(description, target_num=target_num)
+        elif choice == "2":
+            delete_images()
+            print("所有圖片已刪除。")
+        elif choice == "3":
+            print("退出程式。")
+            break
+        else:
+            print("無效的選擇，請重新輸入。")
 
