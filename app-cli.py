@@ -87,28 +87,45 @@ class YoloCLI:
             print("專案內找不到影片檔案")
             return
 
-        for video_path in tqdm(video_files):
+        for video_path in video_files:
             video_path = Path(video_path)
             video_name = video_path.stem
-            image_name_pattern = video_name + "-{:05d}.png"
-            fps = sv.VideoInfo.from_video_path(str(video_path)).fps
+
+            # 取得影片資訊
+            video_info = sv.VideoInfo.from_video_path(str(video_path))
+            fps = video_info.fps
+            frame_count = video_info.total_frames
             frame_stride = round(interval / (1000 / fps))
 
-            print(f"處理影片: {video_path.name}")
+            # 計算預期的總幀數
+            expected_frames = frame_count // frame_stride
+
+            print(f"\n處理影片: {video_path.name}")
             print(f"FPS: {fps} frame/s")
+            print(f"總幀數: {frame_count}")
             print(f"間隔: {interval} ms")
             print(f"取樣步長: {frame_stride}")
+            print(f"預期擷取幀數: {expected_frames}")
+
+            # 建立進度條
+            pbar = tqdm(total=expected_frames, desc="擷取影格")
 
             with sv.ImageSink(
                 target_dir_path=frame_dir,
-                image_name_pattern=image_name_pattern,
+                image_name_pattern=f"{video_name}-{{:05d}}.png",
             ) as sink:
-                frames = sv.get_video_frames_generator(
+                frame_generator = sv.get_video_frames_generator(
                     source_path=str(video_path), stride=frame_stride
                 )
-                for frame in frames:
+
+                saved_count = 0
+                for frame in frame_generator:
                     sink.save_image(frame)
-                print(f"總擷取影格數: {len(list(frames))}")
+                    saved_count += 1
+                    pbar.update(1)
+
+                pbar.close()
+                print(f"實際擷取影格數: {saved_count}")
 
     def auto_label(
         self, projname: str, annotation_class: dict, from_frames: bool = True
