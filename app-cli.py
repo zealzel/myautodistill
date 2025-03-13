@@ -138,6 +138,21 @@ def seg_to_bbox(seg_info):
 class YoloCLI:
     """YOLO 工具的命令列介面"""
 
+    # def __init__(self, projname, test_val_ratio=0.2):
+    #     self.projname = projname
+    #     self.home = os.getcwd()
+    #     self.proj = f"{self.home}/projects/{self.projname}"
+    #     self.video_dir_path = f"{self.proj}/videos"
+    #     self.image_dir_path = f"{self.proj}/images"
+    #     self.frame_dir_path = f"{self.proj}/frames"
+    #     self.frame_interval = 100  # ms
+    #     print("proj:", self.proj)
+    #     print("video_dir_path:", self.video_dir_path)
+    #     print("image_dir_path:", self.image_dir_path)
+    #     print("frame_dir_path:", self.frame_dir_path)
+    #     print("video_paths:", self.video_paths)
+    #     roboflow.login()
+
     def create_proj(self, projname: str):
         """建立新的專案資料夾結構
 
@@ -410,15 +425,24 @@ class YoloCLI:
             "> import failed! files not generated."
         )
 
-    def train(self, projname: str, epochs: int = 50, device: str = "cuda"):
+    def splitdata(self, projname, ratio=0.8):
+        # split_data(output_folder, split_ratio=1.0, record_confidence=record_confidence)
+        proj_dir = Path(os.getcwd()) / "projects" / projname
+        dataset_dir_path = str(proj_dir / "dataset/reviewed")
+        split_data(dataset_dir_path, 0.8)
+
+    # def train(self, projname: str, epochs: int = 50, device: str = "cuda"):
+    def train(self, projname: str, epochs: int = 50, device: str = "mps"):
         """訓練 YOLO 模型
 
         Args:
             projname: 專案名稱
             epochs: 訓練回合數，預設 50
-            device: 運算裝置，預設 'cuda'
+            device: 運算裝置，預設 'mps'
         """
-        data_yaml = Path(os.getcwd()) / "projects" / projname / "dataset" / "data.yaml"
+        data_yaml = (
+            Path(os.getcwd()) / f"projects/{projname}/dataset/reviewed/data.yaml"
+        )
         model = YOLOv8("yolov8n.pt")
         print(f"開始訓練 YOLO 模型，使用裝置: {device}")
         model.train(str(data_yaml), epochs=epochs, device=device)
@@ -501,6 +525,9 @@ if __name__ == "__main__":
     python app-cli.py convert_format proj1 yolo3 yolo8
 
     # split the data into train/valid/test set
-    split_data("/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset/project-9-at-2025-02-19-09-45-87d33f43", 0.8)
+    python app-cli.py splitdata proj1 0.8
+
+    # train yolo model, it will generate model files best.pt under runs/detect/trainxx/weights/
+    python app-cli.py train proj1
 
     """
