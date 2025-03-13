@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 import os
+import yaml
+import cv2
+import enum
 import json
 from datetime import datetime
 import glob
 from pathlib import Path
 from tqdm import tqdm
+import roboflow
 
 import torch
 import fire
@@ -31,6 +35,87 @@ else:
     DEVICE = torch.device("cpu")
 
 print(f"DEVICE: {DEVICE}")
+
+
+class NmsSetting(str, enum.Enum):
+    NONE = "no_nms"
+    CLASS_SPECIFIC = "class_specific"
+    CLASS_AGNOSTIC = "class_agnostic"
+
+
+def my_detection_label(
+    self,
+    input_folder: str,
+    extension: str = ".jpg",
+    output_folder: str | None = None,
+    human_in_the_loop: bool = False,
+    roboflow_project: str | None = None,
+    roboflow_tags: list[str] = ["autodistill"],
+    sahi: bool = False,
+    record_confidence: bool = False,
+    nms_settings: NmsSetting = NmsSetting.NONE,
+) -> sv.DetectionDataset:
+    print("monkey patch! my_detection_label")
+    if output_folder is None:
+        output_folder = input_folder + "_labeled"
+
+    os.makedirs(output_folder, exist_ok=True)
+
+    image_paths = glob.glob(input_folder + "/*" + extension)
+    detections_map = {}
+
+    if sahi:
+        slicer = sv.InferenceSlicer(callback=self.predict)
+
+    progress_bar = tqdm(image_paths, desc="Labeling images")
+    for f_path in progress_bar:
+        progress_bar.set_description(desc=f"Labeling {f_path}", refresh=True)
+
+        image = cv2.imread(f_path)
+        if sahi:
+            detections = slicer(image)
+        else:
+            detections = self.predict(image)
+
+        if nms_settings == NmsSetting.CLASS_SPECIFIC:
+            detections = detections.with_nms()
+        if nms_settings == NmsSetting.CLASS_AGNOSTIC:
+            detections = detections.with_nms(class_agnostic=True)
+
+        detections_map[f_path] = detections
+
+    dataset = sv.DetectionDataset(self.ontology.classes(), image_paths, detections_map)
+
+    dataset.as_yolo(
+        output_folder + "/images",
+        output_folder + "/annotations",
+        min_image_area_percentage=0.01,
+        data_yaml_path=output_folder + "/data.yaml",
+    )
+
+    if record_confidence:
+        image_names = [os.path.basename(f_path) for f_path in image_paths]
+        self._record_confidence_in_files(
+            output_folder + "/annotations", image_names, detections_map
+        )
+
+    # my own overwrite
+    split_data(output_folder, split_ratio=1.0, record_confidence=record_confidence)
+
+    if human_in_the_loop:
+        roboflow.login()
+
+        rf = roboflow.Roboflow()
+
+        workspace = rf.workspace()
+
+        workspace.upload_dataset(output_folder, project_name=roboflow_project)
+
+    print("Labeled dataset created - ready for distillation.")
+    return dataset
+
+
+DetectionBaseModel.label = my_detection_label
 
 
 class YoloCLI:
@@ -127,6 +212,21 @@ class YoloCLI:
                 pbar.close()
                 print(f"實際擷取影格數: {saved_count}")
 
+    def auto_label_test(
+        self, projname: str, annotation_class: dict, from_frames: bool = True
+    ):
+        from autodistill_grounded_sam import GroundedSAM
+
+        print("auto_label")
+        print("projname:", projname)
+        print("annotation_class:", annotation_class)
+        print("type(annotation_class):", type(annotation_class))
+        print("from_frames:", from_frames)
+        if type(annotation_class) is str:
+            print("type(annotation_class) is str")
+            annotation_class = json.loads(annotation_class)
+            print("type(annotation_class):", type(annotation_class))
+
     def auto_label(
         self, projname: str, annotation_class: dict, from_frames: bool = True
     ):
@@ -141,6 +241,9 @@ class YoloCLI:
         """
         proj_dir = Path(os.getcwd()) / "projects" / projname
         dataset_dir = proj_dir / "dataset"
+
+        if type(annotation_class) is str:
+            annotation_class = json.loads(annotation_class)
 
         ontology = CaptionOntology(annotation_class)
         base_model = GroundedSAM(ontology=ontology)
@@ -244,3 +347,13 @@ class YoloCLI:
 
 if __name__ == "__main__":
     fire.Fire(YoloCLI)
+    """usage
+    python app.py create_proj proj1
+
+    python app.py convert_video proj1
+
+    python app-cli.py auto_label proj1 "{
+        'normal human hand': 'hand',
+        'bottle made by silver stain steel with slightly cone shape': 'mybottle'
+    }"
+    """
