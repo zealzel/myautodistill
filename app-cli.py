@@ -316,11 +316,12 @@ class YoloCLI:
             source: 來源格式 ('yolo8' 或 'yolo3')
             target: 目標格式 ('yolo8' 或 'yolo3')
         """
-        dataset_dir = Path(os.getcwd()) / "projects" / projname / "dataset"
 
         if source == "yolo8" and target == "yolo3":
+            dataset_dir = Path(os.getcwd()) / "projects" / projname / "dataset"
             self._yolo8_to_yolo3(dataset_dir)
         elif source == "yolo3" and target == "yolo8":
+            dataset_dir = Path(os.getcwd()) / "projects" / projname / "dataset/reviewed"
             self._yolo3_to_yolo8(dataset_dir)
         else:
             print(f"不支援的格式轉換: {source} -> {target}")
@@ -394,7 +395,8 @@ class YoloCLI:
         input_data_dir = str(dataset_dir_path / "yolov3")
         # image_root_url = "/data/local-files/?d=images"
         image_root_url = "/data/local-files/?d=yolov3/images"
-        out_json_file = "output_for_labelstudio.json"
+        # out_json_file = "output_for_labelstudio.json"
+        out_json_file = str(dataset_dir_path / "output_for_labelstudio.json")
         image_ext = ".jpg,.jpeg,.png"  # comma seperated string of extns.
         # input_dir: directory with YOLO where images, labels, notes.json are located
         import_yolo.convert_yolo_to_ls(
@@ -490,5 +492,15 @@ if __name__ == "__main__":
     python app-cli.py convert_format proj1 yolo8 yolo3
 
     python app-cli.py convert_yolo_to_labelstudio proj1
+
+    # actions in lable-studio
+    - import
+    - review
+    - export
+
+    python app-cli.py convert_format proj1 yolo3 yolo8
+
+    # split the data into train/valid/test set
+    split_data("/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/abc/dataset/project-9-at-2025-02-19-09-45-87d33f43", 0.8)
 
     """
