@@ -178,6 +178,7 @@ class YoloCLI:
             "videos",
             "images",
             "frames",
+            "combined",
             "dataset/yolov8/train/images",
             "dataset/yolov8/train/labels",
             "dataset/yolov8/valid/images",
@@ -263,20 +264,42 @@ class YoloCLI:
         self.convert_format(projname, "yolo8", "yolo3")
         self.convert_yolo_to_labelstudio(projname)
 
-    def auto_label_test(
-        self, projname: str, annotation_class: dict, from_frames: bool = True
-    ):
+    def auto_label_test(self, projname: str):
+        """測試自動標註功能，並將 frames 和 images 目錄的檔案建立符號連結到 combined 目錄
+
+        Args:
+            projname: 專案名稱
+        """
         from autodistill_grounded_sam import GroundedSAM
 
-        print("auto_label")
-        print("projname:", projname)
-        print("annotation_class:", annotation_class)
-        print("type(annotation_class):", type(annotation_class))
-        print("from_frames:", from_frames)
-        if type(annotation_class) is str:
-            print("type(annotation_class) is str")
-            annotation_class = json.loads(annotation_class)
-            print("type(annotation_class):", type(annotation_class))
+        proj_dir = Path(os.getcwd()) / "projects" / projname
+        dataset_dir = proj_dir / "dataset"
+        frames_dir = proj_dir / "frames"
+        images_dir = proj_dir / "images"
+        combined_dir = proj_dir / "combined"
+
+        # 清空 combined 目錄中的現有符號連結
+        for symlink in combined_dir.glob("*"):
+            if symlink.is_symlink():
+                symlink.unlink()
+
+        # 建立 frames 目錄中檔案的符號連結
+        print("\n建立 frames 目錄的符號連結...")
+        for file_path in frames_dir.glob("*"):
+            if file_path.is_file():
+                symlink_path = combined_dir / file_path.name
+                if not symlink_path.exists():
+                    os.symlink(file_path, symlink_path)
+                    print(f"建立連結: {symlink_path}")
+
+        # 建立 images 目錄中檔案的符號連結
+        print("\n建立 images 目錄的符號連結...")
+        for file_path in images_dir.glob("*"):
+            if file_path.is_file():
+                symlink_path = combined_dir / file_path.name
+                if not symlink_path.exists():
+                    os.symlink(file_path, symlink_path)
+                    print(f"建立連結: {symlink_path}")
 
     def auto_label(
         self, projname: str, annotation_class: dict, from_frames: bool = True
