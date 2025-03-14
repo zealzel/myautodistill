@@ -5,3 +5,7 @@ runs/
 dataset/
 extract_frames/
 *.pt
+downloaded_hashes.txt
+downloaded_links.txt
+image-saved/
+downloaded_images/
