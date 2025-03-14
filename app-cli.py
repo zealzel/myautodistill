@@ -62,8 +62,15 @@ def my_detection_label(
 
     os.makedirs(output_folder, exist_ok=True)
 
+    print("input_folder:", input_folder)
+    print("extension:", extension)
     image_paths = glob.glob(input_folder + "/*" + extension)
+    # image_paths = glob.glob(input_folder + "/*" + "png")
     detections_map = {}
+
+    # # debug
+    # for i, each in enumerate(image_paths):
+    #     print("image_path:", each)
 
     if sahi:
         slicer = sv.InferenceSlicer(callback=self.predict)
@@ -264,16 +271,8 @@ class YoloCLI:
         self.convert_format(projname, "yolo8", "yolo3")
         self.convert_yolo_to_labelstudio(projname)
 
-    def auto_label_test(self, projname: str):
-        """測試自動標註功能，並將 frames 和 images 目錄的檔案建立符號連結到 combined 目錄
-
-        Args:
-            projname: 專案名稱
-        """
-        from autodistill_grounded_sam import GroundedSAM
-
+    def _create_combined_images(self, projname):
         proj_dir = Path(os.getcwd()) / "projects" / projname
-        dataset_dir = proj_dir / "dataset"
         frames_dir = proj_dir / "frames"
         images_dir = proj_dir / "images"
         combined_dir = proj_dir / "combined"
@@ -301,9 +300,10 @@ class YoloCLI:
                     os.symlink(file_path, symlink_path)
                     print(f"建立連結: {symlink_path}")
 
-    def auto_label(
-        self, projname: str, annotation_class: dict, from_frames: bool = True
-    ):
+    # def auto_label_test(self, projname: str):
+    #     self._create_combined_images(projname)
+
+    def auto_label(self, projname: str, annotation_class: dict):
         from autodistill_grounded_sam import GroundedSAM
 
         """使用 GroundedSAM 自動標註影像
@@ -314,7 +314,6 @@ class YoloCLI:
             from_frames: 是否從 frames 資料夾讀取圖片，預設為 True
         """
         proj_dir = Path(os.getcwd()) / "projects" / projname
-        # dataset_dir = proj_dir / "dataset"
         dataset_dir = proj_dir / "dataset" / "yolov8"
 
         if type(annotation_class) is str:
@@ -323,7 +322,10 @@ class YoloCLI:
         ontology = CaptionOntology(annotation_class)
         base_model = GroundedSAM(ontology=ontology)
 
-        input_folder = str(proj_dir / ("frames" if from_frames else "images"))
+        self._create_combined_images(projname)
+        # input_folder = str(proj_dir / ("frames" if from_frames else "images"))
+        input_folder = str(proj_dir / "combined")
+
         dataset = base_model.label(
             input_folder=input_folder,
             extension=".png",
