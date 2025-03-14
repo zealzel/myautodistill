@@ -21,6 +21,8 @@ print(f"Using device: {device}")
 #
 PROJ = "test01"
 MODEL = "train"
+# PROJ = "tissue"
+# MODEL = "train"
 # PROJ = "proj1"
 # MODEL = "train9"
 #
@@ -34,7 +36,8 @@ model = YOLO(
     # "runs/detect/train9/weights/best.pt"
     #
     # "projects/test01/runs/detect/train/weights/best.pt"
-    f"projects/{PROJ}/runs/detect/{MODEL}/weights/best.pt"
+    # f"projects/{PROJ}/runs/detect/{MODEL}/weights/best.pt"
+    f"projects/{PROJ}/runs/detect/{MODEL}/weights/best_ncnn_model"
 )
 # model.to(device)
 
@@ -74,7 +77,7 @@ while cap.isOpened():
     classes = get_classes()
     print("classes", classes)
 
-    conf_threshold = 0.7
+    conf_threshold = 0.6
     # conf_thresholds = [0.7, 0.5]
 
     def put_text(text, x1, y1, conf):

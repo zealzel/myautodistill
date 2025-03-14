@@ -585,4 +585,7 @@ if __name__ == "__main__":
     # train yolo model, it will generate model files best.pt under runs/detect/trainxx/weights/
     python app-cli.py train proj1
 
+    # convert model to ncnn format
+    yolo export model=best.pt format=ncnn
+
     """
