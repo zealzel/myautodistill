@@ -5,6 +5,8 @@ import random
 import urllib.parse
 from icrawler.builtin import GoogleImageCrawler
 from icrawler.downloader import ImageDownloader
+from PIL import Image
+from pathlib import Path
 
 
 def get_filename(file_url, default_ext):
@@ -70,6 +72,36 @@ class CustomImageDownloader(ImageDownloader):
             for link in self.downloaded_links:
                 f.write(link + "\n")
             f.flush()
+
+    def _convert_to_png(self, file_path):
+        """將圖片轉換為 PNG 格式
+
+        Args:
+            file_path: 原始圖片路徑
+
+        Returns:
+            str: 轉換後的 PNG 檔案路徑
+        """
+        try:
+            # 讀取圖片
+            with Image.open(file_path) as img:
+                # 如果不是 PNG，進行轉換
+                if img.format != "PNG":
+                    # 生成新的 PNG 檔案路徑
+                    png_path = os.path.splitext(file_path)[0] + ".png"
+                    # 轉換並保存
+                    img = img.convert("RGB")
+                    img.save(png_path, "PNG")
+                    # 刪除原始檔案
+                    os.remove(file_path)
+                    print(f"已將 {file_path} 轉換為 PNG 格式: {png_path}")
+                    return png_path
+                return file_path
+        except Exception as e:
+            print(f"圖片轉換失敗: {e}")
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            return None
 
     def download(self, task, default_ext, timeout=5, max_retry=3, **kwargs):
         file_url = task.get("file_url")
@@ -144,7 +176,10 @@ def get_image_count(save_dir):
     )
 
 
-def delete_images(save_dir="./downloaded_images"):
+SAVE_DIR = "./downloaded_images/original"
+
+
+def delete_images(save_dir=SAVE_DIR):
     """
     刪除指定資料夾中的所有圖片檔案。
     """
@@ -170,7 +205,7 @@ def delete_images(save_dir="./downloaded_images"):
         os.remove("downloaded_links.txt")
 
 
-def fetch_images(query, target_num=20, save_dir="./downloaded_images", max_attempts=10):
+def fetch_images(query, target_num=20, save_dir=SAVE_DIR, max_attempts=10):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
     attempts = 0
@@ -202,13 +237,57 @@ def fetch_images(query, target_num=20, save_dir="./downloaded_images", max_attem
         print(f"成功下載 {target_num} 張圖片")
 
 
+def convert_to_png(download_dir="./downloaded_images"):
+    """將 downloaded_images 目錄下的所有圖片轉換為 PNG 格式，
+    並保存到 downloaded_images/converted-png 目錄
+    """
+    import shutil
+
+    # 設定來源和目標目錄
+    src_dir = Path(SAVE_DIR)
+    dst_dir = Path(download_dir) / "converted-png"
+
+    # 確保目標目錄存在
+    dst_dir.mkdir(parents=True, exist_ok=True)
+
+    # 清空目標目錄
+    for file in dst_dir.glob("*"):
+        if file.is_file():
+            file.unlink()
+
+    # 遍歷來源目錄中的所有圖片
+    converted_count = 0
+    for img_path in src_dir.glob("*"):
+        if img_path.is_file() and img_path.suffix.lower() in [".jpg", ".jpeg", ".png"]:
+            try:
+                # 讀取圖片
+                with Image.open(img_path) as img:
+                    # 生成目標檔案路徑，使用原始檔名但改為 .png 副檔名
+                    dst_path = dst_dir / f"{img_path.stem}.png"
+
+                    # 轉換為 RGB 模式（處理 RGBA 等其他格式）
+                    if img.mode != "RGB":
+                        img = img.convert("RGB")
+
+                    # 保存為 PNG
+                    img.save(dst_path, "PNG")
+                    print(f"已轉換: {img_path.name} -> {dst_path.name}")
+                    converted_count += 1
+
+            except Exception as e:
+                print(f"轉換失敗 {img_path.name}: {e}")
+
+    print(f"\n轉換完成。共轉換 {converted_count} 張圖片到 {dst_dir} 目錄")
+
+
 if __name__ == "__main__":
     while True:
         print("\n選單:")
         print("1. 下載圖片")
         print("2. 刪除所有圖片")
-        print("3. 退出")
-        choice = input("請選擇一個選項 (1/2/3): ")
+        print("3. 轉換圖片為 PNG")
+        print("4. 退出")
+        choice = input("請選擇一個選項 (1/2/3/4): ")
 
         if choice == "1":
             description = input("請輸入物品描述：")
@@ -218,8 +297,10 @@ if __name__ == "__main__":
             delete_images()
             print("所有圖片已刪除。")
         elif choice == "3":
+            convert_to_png()
+            print("圖片轉換完成。")
+        elif choice == "4":
             print("退出程式。")
             break
         else:
             print("無效的選擇，請重新輸入。")
-
