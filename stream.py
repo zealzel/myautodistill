@@ -3,6 +3,8 @@ import time
 from ultralytics import YOLO
 import cv2
 import torch
+import numpy as np
+import colorsys
 
 # Check if MPS is available
 if torch.backends.mps.is_available():
@@ -19,18 +21,14 @@ print(f"Using device: {device}")
 # convert model to ncnn format
 # yolo export model=runs/detect/train9/weights/best.pt format=ncnn
 #
-PROJ = "test01"
-MODEL = "train"
+# PROJ = "test01"
+# MODEL = "train"
 # PROJ = "tissue"
 # MODEL = "train"
-# PROJ = "proj1"
-# MODEL = "train9"
+PROJ = "proj1"
+MODEL = "train9"
 #
 model = YOLO(
-    # "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/runs/detect/train/weights/best.pt"
-    # "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/projects/my-first-customed/runs/detect/train/weights/best.pt"
-    # "/Users/zealzel/Documents/Codes/Current/ai/machine-vision/yolo-learn/myautodistill/runs/detect/train8/weights/best.pt",
-    #
     # "runs/detect/train8/weights/best_ncnn_model"
     # "runs/detect/train8/weights/best.pt"
     # "runs/detect/train9/weights/best.pt"
@@ -60,10 +58,63 @@ object3
 """
 
 
+def generate_colors(n):
+    """為每個類別生成不同的顏色
+
+    Args:
+        n: 類別數量
+
+    Returns:
+        list: BGR 顏色列表，每個顏色為 (B,G,R) tuple
+    """
+    colors = []
+    for i in range(n):
+        # 使用 HSV 色彩空間來生成顏色，確保顏色夠分散
+        hue = i / n
+        sat = 0.9 + np.random.random() * 0.1  # 90-100% 飽和度
+        val = 0.9 + np.random.random() * 0.1  # 90-100% 亮度
+
+        # 轉換 HSV 到 RGB
+        rgb = tuple(round(i * 255) for i in colorsys.hsv_to_rgb(hue, sat, val))
+        # 轉換為 BGR (OpenCV 使用 BGR)
+        bgr = (rgb[2], rgb[1], rgb[0])
+        colors.append(bgr)
+
+    return colors
+
+
 def get_classes(classes_path=f"projects/{PROJ}/dataset/yolov3/classes.txt"):
     with open(classes_path, "r") as f:
         classes = f.read().splitlines()
     return classes
+
+
+# 取得類別列表
+classes = get_classes()
+# 為每個類別生成顏色
+colors = generate_colors(len(classes))
+
+
+def put_text(frame, text, x1, y1, conf, color):
+    """在框上方顯示文字
+
+    Args:
+        frame: 影像幀
+        text: 要顯示的文字
+        x1, y1: 文字位置
+        conf: 信心度
+        color: BGR 顏色元組
+    """
+    cv2.putText(
+        frame,
+        f"{text} {conf:.2f}",
+        (x1, y1 - 10),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        2.0,  # 1.0,
+        color,
+        4,  # 2,
+    )
+    print(f"{text}: {conf:.2f}")
 
 
 while cap.isOpened():
@@ -71,26 +122,9 @@ while cap.isOpened():
     if not ret:
         break
 
-    # 進行人物偵測
     results = model(frame, verbose=False)
 
-    classes = get_classes()
-    print("classes", classes)
-
     conf_threshold = 0.6
-    # conf_thresholds = [0.7, 0.5]
-
-    def put_text(text, x1, y1, conf):
-        cv2.putText(
-            frame,
-            text,
-            (x1, y1 - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1.0,
-            (0, 255, 0),
-            2,
-        )
-        print(f"{text}:  {conf:.2f}")
 
     # 繪製偵測結果
     for result in results:
@@ -98,16 +132,11 @@ while cap.isOpened():
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             conf = box.conf[0].item()
             cls = int(box.cls[0])
-            # if cls == 0 and conf > conf_threshold:
-            #     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            #     put_text(f"Hand {conf:.2f}", x1, y1, conf)
-            # elif cls == 1 and conf > conf_threshold:
-            #     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            #     put_text(f"My Bottle {conf:.2f}", x1, y1, conf)
-            for i, each_class in enumerate(classes):
-                if cls == i and conf > conf_threshold:
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    put_text(f"{each_class} {conf:.2f}", x1, y1, conf)
+
+            if conf > conf_threshold:
+                color = colors[cls]  # 使用對應類別的顏色
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                put_text(frame, classes[cls], x1, y1, conf, color)
 
     cv2.imshow("object detection", frame)
     key = cv2.waitKey(1) & 0xFF
