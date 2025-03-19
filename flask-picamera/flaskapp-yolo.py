@@ -1,16 +1,26 @@
 from flask import Flask, Response, render_template
+import numpy as np
 from picamera2 import Picamera2
 import time
 import cv2
 from ultralytics import YOLO
 import os
+import colorsys
 
 app = Flask(__name__)
 
-# Load the YOLO model
-# model = YOLO("runs/detect/train9/weights/best.pt")
-model = YOLO("runs/detect/train9/weights/best_ncnn_model")
-# model = YOLO("best_ncnn_model")
+PROJ = "proj1"
+MODEL = "train9"
+#
+model = YOLO(
+    # "runs/detect/train8/weights/best_ncnn_model"
+    # "runs/detect/train8/weights/best.pt"
+    # "runs/detect/train9/weights/best.pt"
+    #
+    # "projects/test01/runs/detect/train/weights/best.pt"
+    # f"projects/{PROJ}/runs/detect/{MODEL}/weights/best.pt"
+    f"projects/{PROJ}/runs/detect/{MODEL}/weights/best_ncnn_model"
+)
 
 # Define the video capture object
 # cap = cv2.VideoCapture(0)  # Use 0 for Mac's built-in camera or 1 for an external camera
@@ -48,6 +58,64 @@ os.makedirs(save_dir, exist_ok=True)
 frame_count = 0
 
 
+def get_classes(classes_path=f"../projects/{PROJ}/dataset/yolov3/classes.txt"):
+    with open(classes_path, "r") as f:
+        classes = f.read().splitlines()
+    return classes
+
+
+def generate_colors(n):
+    """為每個類別生成不同的顏色
+
+    Args:
+        n: 類別數量
+
+    Returns:
+        list: BGR 顏色列表，每個顏色為 (B,G,R) tuple
+    """
+    colors = []
+    for i in range(n):
+        # 使用 HSV 色彩空間來生成顏色，確保顏色夠分散
+        hue = i / n
+        sat = 0.9 + np.random.random() * 0.1  # 90-100% 飽和度
+        val = 0.9 + np.random.random() * 0.1  # 90-100% 亮度
+
+        # 轉換 HSV 到 RGB
+        rgb = tuple(round(i * 255) for i in colorsys.hsv_to_rgb(hue, sat, val))
+        # 轉換為 BGR (OpenCV 使用 BGR)
+        bgr = (rgb[2], rgb[1], rgb[0])
+        colors.append(bgr)
+
+    return colors
+
+
+def put_text(frame, text, x1, y1, conf, color):
+    """在框上方顯示文字
+
+    Args:
+        frame: 影像幀
+        text: 要顯示的文字
+        x1, y1: 文字位置
+        conf: 信心度
+        color: BGR 顏色元組
+    """
+    cv2.putText(
+        frame,
+        f"{text} {conf:.2f}",
+        (x1, y1 - 10),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        2.0,  # 1.0,
+        color,
+        4,  # 2,
+    )
+    print(f"{text}: {conf:.2f}")
+
+
+classes = get_classes()
+colors = generate_colors(len(classes))
+print("classes", classes)
+
+
 def gen_frames():
     global frame_count
     conf_threshold = 0.8  # Confidence threshold for detections
@@ -73,27 +141,39 @@ def gen_frames():
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 conf = box.conf[0].item()
                 cls = int(box.cls[0])
-                if cls == 0 and conf > conf_threshold:  # cls == 0 indicates "hand"
-                    label = f"Hand {conf:.2f}"
-                    color = (0, 255, 0)
-                elif (
-                    cls == 1 and conf > conf_threshold_bottle
-                ):  # cls == 1 indicates "bottle"
-                    label = f"My Bottle {conf:.2f}"
-                    color = (255, 0, 0)
-                else:
-                    continue
 
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(
-                    frame,
-                    label,
-                    (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.9,
-                    color,
-                    2,
-                )
+                if conf > conf_threshold:
+                    color = colors[cls]  # 使用對應類別的顏色
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    put_text(frame, classes[cls], x1, y1, conf, color)
+                    # def put_text(text, x1, y1, conf):
+
+        # for result in results:
+        #     for box in result.boxes:
+        #         x1, y1, x2, y2 = map(int, box.xyxy[0])
+        #         conf = box.conf[0].item()
+        #         cls = int(box.cls[0])
+        #         if cls == 0 and conf > conf_threshold:  # cls == 0 indicates "hand"
+        #             label = f"Hand {conf:.2f}"
+        #             color = (0, 255, 0)
+        #         elif (
+        #             cls == 1 and conf > conf_threshold_bottle
+        #         ):  # cls == 1 indicates "bottle"
+        #             label = f"My Bottle {conf:.2f}"
+        #             color = (255, 0, 0)
+        #         else:
+        #             continue
+        #
+        #         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        #         cv2.putText(
+        #             frame,
+        #             label,
+        #             (x1, y1 - 10),
+        #             cv2.FONT_HERSHEY_SIMPLEX,
+        #             0.9,
+        #             color,
+        #             2,
+        #         )
 
         # Encode the frame as JPEG
         ret, buffer = cv2.imencode(".jpg", frame)
