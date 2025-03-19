@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Camera Stream</title>
+    <style>
+      /* 讓 html 與 body 佔滿全螢幕且無邊距 */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      /* 設定影像元素充滿視窗並維持比例 */
+      .video-stream {
+        width: 100vw;
+        height: 100vh;
+        object-fit: cover;
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <img
+      src="/video_feed"
+      class="video-stream"
+      style="width: 100vw; height: 100vh; object-fit: contain"
+    />
+  </body>
+</html>

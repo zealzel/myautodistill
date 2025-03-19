@@ -1,4 +1,4 @@
-from flask import Flask, Response
+from flask import Flask, Response, render_template
 import cv2
 import time
 from picamera2 import Picamera2
@@ -28,6 +28,12 @@ def gen_frames():
 @app.route("/video_feed")
 def video_feed():
     return Response(gen_frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.route("/")
+def index():
+    # Main page
+    return render_template("index.html")
 
 
 if __name__ == "__main__":
