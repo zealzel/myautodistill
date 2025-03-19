@@ -7,5 +7,6 @@ extract_frames/
 *.pt
 downloaded_hashes.txt
 downloaded_links.txt
+*.tgz
 image-saved/
 downloaded_images/
