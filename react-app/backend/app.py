@@ -1,6 +1,7 @@
 import sys
 import os
 import colorsys
+import hashlib
 
 # 將專案根目錄加入 sys.path
 sys.path.insert(
@@ -31,10 +32,8 @@ def get_classes(classes_path=f"../../projects/{PROJ}/dataset/yolov3/classes.txt"
 
 def generate_colors(n):
     """為每個類別生成不同的顏色
-
     Args:
         n: 類別數量
-
     Returns:
         list: BGR 顏色列表，每個顏色為 (B,G,R) tuple
     """
@@ -44,13 +43,9 @@ def generate_colors(n):
         hue = i / n
         sat = 0.9 + np.random.random() * 0.1  # 90-100% 飽和度
         val = 0.9 + np.random.random() * 0.1  # 90-100% 亮度
-
-        # 轉換 HSV 到 RGB
         rgb = tuple(round(i * 255) for i in colorsys.hsv_to_rgb(hue, sat, val))
-        # 轉換為 BGR (OpenCV 使用 BGR)
-        bgr = (rgb[2], rgb[1], rgb[0])
-        colors.append(bgr)
-
+        hex_color = "#{:02x}{:02x}{:02x}".format(rgb[0], rgb[1], rgb[2])
+        colors.append(hex_color)
     return colors
 
 
@@ -124,6 +119,7 @@ def detect():
                         "label": classes[cls],
                         "confidence": conf,
                         "location": {"left": x1, "top": y1, "right": x2, "bottom": y2},
+                        "color": color,
                     }
                 )
 

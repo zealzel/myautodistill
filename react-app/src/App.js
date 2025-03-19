@@ -85,9 +85,10 @@ function App() {
           (object.location.bottom - object.location.top) * scaleY;
 
         // 根據物體類型設定不同的邊框顏色
-        const borderColor = object.label.includes("Hand")
-          ? "#00ff00"
-          : "#ff0000";
+        const borderColor = object.color;
+        // const borderColor = object.label.includes("Hand")
+        //   ? "#00ff00"
+        //   : "#ff0000";
 
         return (
           <div
